@@ -62,6 +62,49 @@
       .catch(function () { /* server unreachable — keep local data */ });
   }
 
+  /* --- Server/local id collisions ---------------------------------------
+     Local accounts get id = DB.nextUserId++ (starting at 1) and server
+     accounts get id = seq:user (also starting at 1), so a server user
+     merged into this browser's DB can share its numeric id with an older
+     local account. `me()` uses Array.find, so the older record would shadow
+     the real logged-in user everywhere (profile, history, leaderboard) —
+     e.g. a stale local "Test User / CSE-2324001" record hiding the server
+     "Test User / CSE-2324999" account. Keep every local id unique: move
+     any record holding a server id out of the way before the merge. This
+     also repairs a duplicate already saved in this browser's localStorage.
+     ------------------------------------------------------------------- */
+  function reassignLocalUserId(user, newId) {
+    var oldId = user.id;
+    if (oldId === newId) return;
+    user.id = newId;
+    DB.attempts.forEach(function (a) { if (a.userId === oldId) a.userId = newId; });
+    DB.liveRooms.forEach(function (r) {
+      if (r.hostId === oldId) r.hostId = newId;
+      if (r.players && Object.prototype.hasOwnProperty.call(r.players, oldId)) {
+        var p = r.players[oldId];
+        delete r.players[oldId];
+        p.userId = newId;
+        r.players[newId] = p;
+      }
+    });
+  }
+
+  /* Make sure the local record for a server user ends up with the server
+     id, and that no OTHER local record holds that id. Returns the local
+     record for the server user, or null if there is none yet. */
+  function ensureServerUserId(srvUser) {
+    var local = DB.users.find(function (u) { return u.email === srvUser.email; });
+    // Never let a later local sign-up reuse a server id.
+    if (DB.nextUserId <= srvUser.id) DB.nextUserId = srvUser.id + 1;
+    // A stale record holding this server id would shadow the real user in
+    // me() lookups (Array.find returns the first match) — move it away.
+    DB.users.slice().forEach(function (u) {
+      if (u !== local && u.id === srvUser.id) reassignLocalUserId(u, DB.nextUserId++);
+    });
+    if (local && local.id !== srvUser.id) reassignLocalUserId(local, srvUser.id);
+    return local;
+  }
+
   /* Merge a server user into the local DB (keeps the local password hash so
      offline login still works) and make it the current session. */
   function applyServerUser(srvUser, tok, opts) {
@@ -69,7 +112,7 @@
     if (!opts.skipTokenSave && tok) {
       try { localStorage.setItem(TOKEN_KEY, tok); } catch (e) {}
     }
-    var local = DB.users.find(function (u) { return u.email === srvUser.email; });
+    var local = ensureServerUserId(srvUser);
     if (local) {
       local.name = srvUser.name;
       local.studentId = srvUser.studentId;
@@ -86,8 +129,6 @@
         createdAt: srvUser.createdAt, lastLoginAt: srvUser.lastLoginAt,
       });
     }
-    // Never let a later local sign-up reuse a server id.
-    if (DB.nextUserId <= srvUser.id) DB.nextUserId = srvUser.id + 1;
     sessionUserId = srvUser.id;
     try { saveSession(); } catch (e) {}
     view = srvUser.isAdmin ? "admin" : "home";
@@ -203,11 +244,10 @@
         if (!x.d.ok) return;
         server.adminLoaded = true;
         x.d.users.forEach(function (su) {
-          var local = DB.users.find(function (u) { return u.email === su.email; });
+          var local = ensureServerUserId(su);
           if (local) {
             local.name = su.name; local.studentId = su.studentId; local.isAdmin = su.isAdmin;
             local.photo = su.photo; local.lastLoginAt = su.lastLoginAt;
-            if (DB.nextUserId <= su.id) DB.nextUserId = su.id + 1;
           } else {
             DB.users.push({
               id: su.id, name: su.name, studentId: su.studentId, email: su.email,
