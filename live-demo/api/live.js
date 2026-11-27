@@ -7,7 +7,8 @@
      The 51st join is rejected with a Bengali "room full" error.
    - Join is allowed only while the room is in the lobby; starting is
      host-only; everyone in the room answers the same questions (the
-     questionIds the host drew from the shared 313-question bank).
+     questionIds the host drew once from the shared 813-question bank
+     and stored in the room at creation — never re-drawn per player).
    - Answers are stored compactly per player: [selectedIndex, correct, timeMs]
      per question index (null = unanswered). Correctness is computed on the
      server from the selectedIndex + correctIndex the client sends, never
