@@ -76,10 +76,13 @@
       local.isAdmin = srvUser.isAdmin;
       local.photo = srvUser.photo;
       local.lastLoginAt = srvUser.lastLoginAt;
+      // Keep the browser-side hash so the same email+password still logs
+      // in from localStorage if the server is ever unreachable.
+      if (opts.localPasswordHash) local.passwordHash = opts.localPasswordHash;
     } else {
       DB.users.push({
         id: srvUser.id, name: srvUser.name, studentId: srvUser.studentId, email: srvUser.email,
-        passwordHash: "", isAdmin: srvUser.isAdmin, photo: srvUser.photo,
+        passwordHash: opts.localPasswordHash || "", isAdmin: srvUser.isAdmin, photo: srvUser.photo,
         createdAt: srvUser.createdAt, lastLoginAt: srvUser.lastLoginAt,
       });
     }
@@ -116,7 +119,7 @@
         .then(readJson)
         .then(function (x) {
           if (!x.d.ok) return fail(x.d.error || "সাইন আপ হয়নি, আবার চেষ্টা করো।");
-          applyServerUser(x.d.user, x.d.token);
+          applyServerUser(x.d.user, x.d.token, { localPasswordHash: hashPassword(password) });
         })
         .catch(function () { fail("সার্ভারে যোগাযোগ হচ্ছে না — নেট চেক করে আবার চেষ্টা করো।"); });
       return true;
@@ -131,7 +134,7 @@
         if (mode === "admin" && !x.d.user.isAdmin) {
           return fail("এই অ্যাকাউন্টে অ্যাডমিন অ্যাক্সেস নেই। শুধুমাত্র অ্যাডমিনের নিজের অ্যাকাউন্ট দিয়েই Admin Dashboard খোলা যাবে।");
         }
-        applyServerUser(x.d.user, x.d.token);
+        applyServerUser(x.d.user, x.d.token, { localPasswordHash: hashPassword(password) });
       })
       .catch(function () { fail("সার্ভারে যোগাযোগ হচ্ছে না — নেট চেক করে আবার চেষ্টা করো।"); });
     return true;
