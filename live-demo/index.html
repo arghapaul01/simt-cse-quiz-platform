@@ -149,6 +149,19 @@
       .seg.dark button.on { background: #0f172a; }
       .seg.rose button.on { background: #0f172a; }
       details summary { min-height: 2.25rem; }
+      /* ---------- Full-width mobile header ---------- */
+      .app-header { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+      .app-header .brand-card { flex: 1 1 100%; min-width: 0; }
+      .app-header .header-actions { display: flex; flex-shrink: 0; gap: .5rem; margin-left: auto; }
+      @media (max-width: 639px) {
+        .app-header .brand-card { padding: .75rem 1rem; }
+        .brand-title { font-size: 19px !important; line-height: 1.3; }
+        .brand-badge { font-size: 12px !important; padding: .4rem .8rem !important; white-space: normal; line-height: 1.5; }
+      }
+      @media (min-width: 640px) {
+        .app-header { flex-wrap: nowrap; }
+        .app-header .brand-card { flex: 1 1 auto; }
+      }
     </style>
   </head>
   <body>
@@ -162,6 +175,31 @@
       const QUESTION_SECONDS = 30;
       const LIVE_SECONDS = 20;
       const SOLO_COUNT = 30;
+      /* Overall quiz clock: 30 seconds of total time per question — 15
+         minutes for a 30-question quiz, 25 minutes for 50 questions. */
+      const TOTAL_SECONDS_PER_QUESTION = 30;
+      const fmtClock = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+      /* Demo leaderboard: Argha is always #1 (50/50, 100%, gold medal)
+         with his own photo, then 7 demo classmates with their own
+         student IDs, photos and scores. These are display-only seed
+         rows shown when there are few real players — they are NOT
+         accounts, they never sign in, and they never touch the server
+         or any real student's history. */
+      const DEMO_LEADERBOARD = [
+        { name: "Argha Paul", studentId: "CSE-2324001", photo: "assets/argha-photo.jpg", correct: 50, total: 50 },
+        { name: "Tanvir Hasan", studentId: "CSE-2324002", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Tanvir-Hasan", correct: 47, total: 50 },
+        { name: "Nusrat Jahan", studentId: "CSE-2324003", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Nusrat-Jahan", correct: 45, total: 50 },
+        { name: "Rakibul Islam", studentId: "CSE-2324004", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Rakibul-Islam", correct: 42, total: 50 },
+        { name: "Mim Akter", studentId: "CSE-2324005", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Mim-Akter", correct: 38, total: 50 },
+        { name: "Shakil Ahmed", studentId: "CSE-2324006", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Shakil-Ahmed", correct: 35, total: 50 },
+        { name: "Priya Das", studentId: "CSE-2324007", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Priya-Das", correct: 32, total: 50 },
+        { name: "Arif Hossain", studentId: "CSE-2324008", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Arif-Hossain", correct: 29, total: 50 },
+      ];
+      /* Test accounts left over from earlier live checks — hidden from
+         the public leaderboard only (their server accounts and history
+         are NOT deleted). */
+      const HIDDEN_TEST_STUDENT_IDS = new Set(["CSE-2324999", "CSE-2324111"]);
 
       /* In-browser data store for this live page: accounts, attempts and
          live rooms are saved to this browser's localStorage (see the
@@ -289,15 +327,27 @@
       const leaderboardEntries = () => {
         const byUser = new Map();
         DB.attempts.forEach((a) => {
-          const cur = byUser.get(a.userId) || { attempts: 0, totalCorrect: 0, bestPercent: 0 };
-          cur.attempts += 1; cur.totalCorrect += a.score;
+          const cur = byUser.get(a.userId) || { attempts: 0, totalCorrect: 0, totalQuestions: 0, bestPercent: 0 };
+          cur.attempts += 1; cur.totalCorrect += a.score; cur.totalQuestions += a.total;
           cur.bestPercent = Math.max(cur.bestPercent, Math.round((a.score / a.total) * 100));
           byUser.set(a.userId, cur);
         });
-        return [...byUser.entries()]
+        const real = [...byUser.entries()]
           .map(([userId, s]) => ({ user: DB.users.find((u) => u.id === userId), ...s }))
-          .filter((e) => e.user)
+          .filter((e) => e.user && !HIDDEN_TEST_STUDENT_IDS.has(e.user.studentId));
+        const seenIds = new Set(real.map((e) => e.user.studentId));
+        // A real account that already has a demo row (e.g. Argha himself)
+        // is shown once — through the demo row — so nobody appears twice.
+        const loggedIn = me();
+        const demo = DEMO_LEADERBOARD
+          .filter((d) => !seenIds.has(d.studentId))
+          .map((d) => ({ user: { id: (loggedIn && loggedIn.studentId === d.studentId) ? loggedIn.id : `demo-${d.studentId}`, name: d.name, studentId: d.studentId, photo: d.photo }, attempts: 1, totalCorrect: d.correct, totalQuestions: d.total, bestPercent: Math.round((d.correct / d.total) * 100), isDemo: true }));
+        const board = [...real, ...demo]
           .sort((a, b) => b.totalCorrect - a.totalCorrect || b.bestPercent - a.bestPercent);
+        // Argha is always #1 on the leaderboard.
+        const arghaIdx = board.findIndex((e) => e.user.studentId === "CSE-2324001");
+        if (arghaIdx > 0) { const [argha] = board.splice(arghaIdx, 1); board.unshift(argha); }
+        return board.slice(0, 10);
       };
       const livePlayersSorted = (room) => Object.values(room.players).sort((a, b) => b.correct - a.correct || a.totalTimeMs - b.totalTimeMs);
       const myLiveEvents = (userId) => DB.liveRooms
@@ -315,8 +365,8 @@
         <div style="display:flex;align-items:center;gap:.75rem">
           <img src="assets/simt-eng-logo.webp" alt="SIMT Engineering College shield logo — Saic Institute of Management and Technology" style="height:${small ? 48 : 64}px;width:${small ? 48 : 64}px;flex-shrink:0;border-radius:16px;background:#fff;object-fit:contain;padding:4px;box-shadow:0 10px 20px rgba(0,0,0,.25);outline:2px solid rgba(255,255,255,.6);outline-offset:-2px" />
           <div style="line-height:1.25">
-            <p class="font-display" style="margin:0;font-weight:800;font-size:${small ? 15 : 18}px">Saic Institute of Management<br />and Technology</p>
-            <p style="margin:.35rem 0 0;display:inline-block;background:linear-gradient(90deg,#059669,#0d9488,#2563eb);color:#fff;font-size:11px;font-weight:700;letter-spacing:.02em;padding:.3rem .65rem;border-radius:999px;box-shadow:0 2px 8px rgba(5,150,105,.35)">Dept. of CSE • Affiliated to University of Dhaka</p>
+            <p class="font-display brand-title" style="margin:0;font-weight:800;font-size:${small ? 15 : 18}px">Saic Institute of Management<br />and Technology</p>
+            <p class="brand-badge" style="margin:.35rem 0 0;display:inline-block;background:linear-gradient(90deg,#059669,#0d9488,#2563eb);color:#fff;font-size:11px;font-weight:700;letter-spacing:.02em;padding:.3rem .65rem;border-radius:999px;box-shadow:0 2px 8px rgba(5,150,105,.35)">Dept. of CSE • Affiliated to University of Dhaka</p>
           </div>
         </div>`;
 
@@ -593,9 +643,9 @@
         const totalQ = DB.questions.length;
         $app.innerHTML = `
         <div class="wrap wrap-3xl" style="padding-top:1rem;padding-bottom:7rem">
-          <header style="display:flex;align-items:center;justify-content:space-between;gap:.75rem">
-            <div class="card" style="border-radius:16px;padding:.5rem .75rem">${brandHtml(true)}</div>
-            <div style="display:flex;flex-shrink:0;gap:.5rem">
+          <header class="app-header">
+            <div class="card brand-card" style="border-radius:16px;padding:.5rem .75rem">${brandHtml(true)}</div>
+            <div class="header-actions">
               ${user.isAdmin ? `<button id="hdr-admin" class="font-display" style="border:0;border-radius:999px;background:#0f172a;padding:.55rem 1rem;font-size:14px;font-weight:800;color:#fff;box-shadow:0 6px 14px rgba(15,23,42,.3)">🛡️ Admin</button>` : ""}
               <button id="hdr-logout" class="btn-ghost" style="border:0">Logout ⎋</button>
             </div>
@@ -638,7 +688,7 @@
           </section>
 
           <h3 class="font-display" style="margin:1.75rem 0 0;font-size:20px;font-weight:800">ক্যাটাগরি বেছে নাও</h3>
-          <p style="margin:.15rem 0 0;font-size:14px;color:var(--dim)">মোট ${totalQ}টি প্রশ্ন • প্রতি কুইজে ৩০টি, প্রতি প্রশ্নে ৩০ সেকেন্ড</p>
+          <p style="margin:.15rem 0 0;font-size:14px;color:var(--dim)">মোট ${totalQ}টি প্রশ্ন • প্রতি কুইজে ৩০টি, প্রতি প্রশ্নে ৩০ সেকেন্ড, মোট সময় ১৫ মিনিট</p>
           <div class="cat-grid" style="margin-top:1rem;display:grid;grid-template-columns:1fr;gap:.75rem">
             ${DB.categories.map((c, i) => {
               const n = counts.get(c.name) || 0;
@@ -690,7 +740,7 @@
         const user = me();
         const questions = drawQuestions(category, count, user.id);
         if (!questions.length) return;
-        quiz = { category, questions, index: 0, score: 0, streak: 0, bestStreak: 0, review: [], selected: null, feedback: null, seconds: QUESTION_SECONDS, startedAt: Date.now() };
+        quiz = { category, questions, index: 0, score: 0, streak: 0, bestStreak: 0, review: [], selected: null, feedback: null, seconds: QUESTION_SECONDS, totalSeconds: questions.length * TOTAL_SECONDS_PER_QUESTION, totalLeft: questions.length * TOTAL_SECONDS_PER_QUESTION, startedAt: Date.now() };
         view = "quiz";
         render();
       };
@@ -718,6 +768,11 @@
             <span id="quiz-clock" class="font-display" style="font-size:18px;font-weight:800;${quiz.seconds <= 8 ? "color:#f43f5e" : ""}">⏱️ ${Math.max(quiz.seconds, 0)}s</span>
             <div class="progress-track" style="height:8px"><div id="quiz-timer-fill" style="height:100%;border-radius:999px;transition:width 1s linear;${quiz.seconds <= 8 ? "background:#f43f5e" : "background:#fbbf24"};width:${timerPct}%"></div></div>
             <span style="font-size:14px;font-weight:700;color:#059669">⭐ Score ${quiz.score}</span>
+          </div>
+          <div style="margin-top:.5rem;display:flex;align-items:center;gap:.75rem">
+            <span id="quiz-total-clock" class="font-display" style="font-size:15px;font-weight:800;${quiz.totalLeft <= 60 ? "color:#f43f5e" : ""}">⏱️ মোট সময় ${fmtClock(quiz.totalLeft)}</span>
+            <div class="progress-track" style="height:8px"><div id="quiz-total-fill" style="height:100%;border-radius:999px;transition:width 1s linear;${quiz.totalLeft <= 60 ? "background:#f43f5e" : "background:#0b5ed7"};width:${Math.max(0, (quiz.totalLeft / quiz.totalSeconds) * 100)}%"></div></div>
+            <span style="font-size:12px;font-weight:700;color:var(--dim)">মোট ${fmtClock(quiz.totalSeconds)}</span>
           </div>
 
           <div class="anim-slide-q card" style="margin-top:1.25rem;border-radius:28px;padding:1.5rem;box-shadow:0 14px 30px rgba(11,30,63,.12)">
@@ -753,18 +808,25 @@
         const nextBtn = document.getElementById("quiz-next");
         if (nextBtn) nextBtn.addEventListener("click", advanceSolo);
 
+        // The overall clock runs even while an answer's explanation is
+        // on screen — sitting idle after answering still uses total time.
         stopQuizTimer();
-        if (!fb) {
-          quizTickTimer = setInterval(() => {
-            if (!quiz || view !== "quiz" || quiz.feedback) { stopQuizTimer(); return; }
-            quiz.seconds -= 1;
-            const clock = document.getElementById("quiz-clock");
-            const fill = document.getElementById("quiz-timer-fill");
-            if (clock) { clock.textContent = `⏱️ ${Math.max(quiz.seconds, 0)}s`; if (quiz.seconds <= 8) { clock.style.color = "#f43f5e"; clock.classList.add("anim-shake"); } }
-            if (fill) { fill.style.width = `${Math.max(0, (quiz.seconds / QUESTION_SECONDS) * 100)}%`; if (quiz.seconds <= 8) fill.style.background = "#f43f5e"; }
-            if (quiz.seconds <= 0) { stopQuizTimer(); answerSolo(-1); }
-          }, 1000);
-        }
+        quizTickTimer = setInterval(() => {
+          if (!quiz || view !== "quiz") { stopQuizTimer(); return; }
+          quiz.totalLeft -= 1;
+          const totalClock = document.getElementById("quiz-total-clock");
+          const totalFill = document.getElementById("quiz-total-fill");
+          if (totalClock) { totalClock.textContent = `⏱️ মোট সময় ${fmtClock(quiz.totalLeft)}`; if (quiz.totalLeft <= 60) { totalClock.style.color = "#f43f5e"; totalClock.classList.add("anim-shake"); } }
+          if (totalFill) { totalFill.style.width = `${Math.max(0, (quiz.totalLeft / quiz.totalSeconds) * 100)}%`; if (quiz.totalLeft <= 60) totalFill.style.background = "#f43f5e"; }
+          if (quiz.totalLeft <= 0) { stopQuizTimer(); autoFinishSolo(); return; }
+          if (quiz.feedback) return;
+          quiz.seconds -= 1;
+          const clock = document.getElementById("quiz-clock");
+          const fill = document.getElementById("quiz-timer-fill");
+          if (clock) { clock.textContent = `⏱️ ${Math.max(quiz.seconds, 0)}s`; if (quiz.seconds <= 8) { clock.style.color = "#f43f5e"; clock.classList.add("anim-shake"); } }
+          if (fill) { fill.style.width = `${Math.max(0, (quiz.seconds / QUESTION_SECONDS) * 100)}%`; if (quiz.seconds <= 8) fill.style.background = "#f43f5e"; }
+          if (quiz.seconds <= 0) { stopQuizTimer(); answerSolo(-1); }
+        }, 1000);
       };
 
       const answerSolo = (sel) => {
@@ -777,6 +839,17 @@
         quiz.review.push({ question: q.question, topic: q.topic, options: q.options, selectedIndex: sel, correctIndex: q.correctIndex, explanation: q.explanation, correct });
         stopQuizTimer();
         renderQuiz();
+      };
+
+      const autoFinishSolo = () => {
+        if (!quiz) return;
+        // Total time is over: every question not answered yet counts as
+        // wrong, then the quiz submits exactly like a normal finish.
+        const answered = new Set(quiz.review.map((r) => r.question));
+        quiz.questions.forEach((q) => {
+          if (!answered.has(q.question)) quiz.review.push({ question: q.question, topic: q.topic, options: q.options, selectedIndex: -1, correctIndex: q.correctIndex, explanation: q.explanation, correct: false });
+        });
+        finishSolo();
       };
 
       const advanceSolo = () => {
@@ -990,14 +1063,17 @@
           <p style="margin:.15rem 0 0;font-size:14px;color:var(--dim)">মোট সঠিক উত্তর অনুযায়ী SIMT CSE শিক্ষার্থীদের র‍্যাংকিং।</p>
           <div style="margin-top:1rem;display:grid;gap:.6rem">
             ${board.map((e, i) => `
-            <div class="anim-pop" style="animation-delay:${i * 0.05}s;display:flex;align-items:center;gap:.75rem;border-radius:16px;padding:1rem;box-shadow:0 1px 3px rgba(11,30,63,.07);${e.user.id === user.id ? "background:var(--blue-soft);outline:1px solid rgba(11,94,215,.4);outline-offset:-1px" : "background:var(--surface);outline:1px solid var(--border);outline-offset:-1px"}">
+            <div class="anim-pop" style="animation-delay:${i * 0.05}s;display:flex;align-items:center;gap:.75rem;border-radius:16px;padding:1rem;box-shadow:0 1px 3px rgba(11,30,63,.07);${i === 0 ? "background:linear-gradient(135deg,#fef3c7,#fde68a);outline:2px solid #f59e0b;outline-offset:-2px" : e.user.id === user.id ? "background:var(--blue-soft);outline:1px solid rgba(11,94,215,.4);outline-offset:-1px" : "background:var(--surface);outline:1px solid var(--border);outline-offset:-1px"}">
               <span style="width:36px;text-align:center;font-size:24px">${medals[i] ?? `<span class="font-display" style="font-size:16px;font-weight:800;color:var(--dim)">${i + 1}</span>`}</span>
               ${avatarHtml(e.user, 44, 17)}
               <div style="min-width:0;flex:1">
-                <p style="margin:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.user.name)} ${e.user.id === user.id ? `<span style="font-size:12px;font-weight:700;color:var(--accent)">(তুমি)</span>` : ""}</p>
+                <p style="margin:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i === 0 ? "👑 " : ""}${esc(e.user.name)} ${e.user.id === user.id ? `<span style="font-size:12px;font-weight:700;color:var(--accent)">(তুমি)</span>` : ""}</p>
                 <p style="margin:0;font-size:12px;color:var(--dim)">🪪 ${esc(e.user.studentId || "—")} • ${e.attempts}টি কুইজ • সেরা ${e.bestPercent}%</p>
               </div>
-              <span class="font-display" style="font-size:18px;font-weight:800;color:#059669">${e.totalCorrect} ✔</span>
+              <div style="flex-shrink:0;text-align:right">
+                <p class="font-display" style="margin:0;font-size:18px;font-weight:800;color:#059669">${e.totalCorrect}/${e.totalQuestions} ✔</p>
+                <p style="margin:0;font-size:12px;font-weight:700;color:var(--dim)">${e.bestPercent}% সঠিক</p>
+              </div>
             </div>`).join("")}
             ${board.length === 0 ? `
             <div class="card" style="border-radius:24px;padding:2rem;text-align:center">
@@ -1062,6 +1138,8 @@
           room.status = "running";
           room.currentIndex = 0;
           room.deadlineAt = Date.now() + LIVE_SECONDS * 1000;
+          room.totalSeconds = room.questionIds.length * TOTAL_SECONDS_PER_QUESTION;
+          room.startedAt = Date.now();
         }
         // Always repaint on a host start tap: if the room is already
         // running (an earlier tap flipped the state but the screen never
@@ -1103,6 +1181,28 @@
         render();
       };
       const stopLiveTimer = () => { if (liveTickTimer) { clearInterval(liveTickTimer); liveTickTimer = null; } };
+      /* Overall live clock from the moment the host starts the room:
+         15 minutes for 30 questions, 25 minutes for 50. Rooms saved
+         before this change have no startedAt — they get a fresh full
+         clock the first time the tick sees them running. */
+      const liveTotalLeft = (room) => {
+        if (!room || room.status !== "running") return room && room.totalSeconds ? room.totalSeconds : 0;
+        const total = room.totalSeconds || room.questionIds.length * TOTAL_SECONDS_PER_QUESTION;
+        const start = room.startedAt || Date.now();
+        return Math.max(0, total - Math.floor((Date.now() - start) / 1000));
+      };
+      const finishLiveRoom = (room) => {
+        if (!room || room.status !== "running") return;
+        room.questionIds.forEach((qid, idx) => {
+          Object.values(room.players).forEach((p) => {
+            if (!p.answers[idx]) {
+              p.answers[idx] = { questionId: qid, selectedIndex: -1, correct: false, timeMs: LIVE_SECONDS * 1000 };
+              p.wrong += 1; p.totalTimeMs += LIVE_SECONDS * 1000;
+            }
+          });
+        });
+        room.status = "finished"; room.deadlineAt = null; liveUiSig = ""; render();
+      };
 
       const renderLive = () => {
         const user = me();
@@ -1150,7 +1250,7 @@
           <div class="anim-pop card" style="margin-top:1.25rem;border-radius:28px;padding:1.5rem;text-align:center;box-shadow:0 14px 30px rgba(11,30,63,.12)">
             <p style="margin:0;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.25em;color:var(--dim)">রুম কোড — সবাইকে শেয়ার করো</p>
             <p class="font-display" style="margin:.25rem 0 0;font-size:48px;font-weight:800;letter-spacing:.2em">${esc(room.code)}</p>
-            <p style="margin:.25rem 0 0;font-size:14px;color:var(--dim)">${esc(room.category)} • ${room.questionIds.length}টি প্রশ্ন • প্রতি প্রশ্নে ২০ সেকেন্ড</p>
+            <p style="margin:.25rem 0 0;font-size:14px;color:var(--dim)">${esc(room.category)} • ${room.questionIds.length}টি প্রশ্ন • প্রতি প্রশ্নে ২০ সেকেন্ড • মোট সময় ${room.questionIds.length * TOTAL_SECONDS_PER_QUESTION / 60} মিনিট</p>
             <div style="margin-top:1.25rem;text-align:left">
               <p style="margin:0;font-size:14px;font-weight:700">👥 জয়েন করেছে (${players.length} জন) — লাইভ আপডেট হয়</p>
               <div style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.5rem">
@@ -1175,6 +1275,11 @@
               <div class="progress-track"><div class="progress-fill live" style="width:${(room.currentIndex / room.questionIds.length) * 100}%"></div></div>
               <span style="font-size:14px;font-weight:700;color:var(--dim)">${room.currentIndex + 1}/${room.questionIds.length}</span>
               <span id="live-clock" class="font-display" style="font-size:18px;font-weight:800;${secsLeft <= 5 ? "color:#f43f5e" : ""}">⏱️ ${secsLeft}s</span>
+            </div>
+            <div style="margin-top:.5rem;display:flex;align-items:center;gap:.75rem">
+              <span id="live-total-clock" class="font-display" style="font-size:15px;font-weight:800">⏱️ মোট সময় ${fmtClock(liveTotalLeft(room))}</span>
+              <div class="progress-track" style="height:8px"><div id="live-total-fill" style="height:100%;border-radius:999px;transition:width .25s linear;background:#f43f5e;width:${Math.max(0, (liveTotalLeft(room) / (room.totalSeconds || room.questionIds.length * TOTAL_SECONDS_PER_QUESTION)) * 100)}%"></div></div>
+              <span style="font-size:12px;font-weight:700;color:var(--dim)">মোট ${fmtClock(room.totalSeconds || room.questionIds.length * TOTAL_SECONDS_PER_QUESTION)}</span>
             </div>
             <div class="anim-slide-q card" style="margin-top:1rem;border-radius:28px;padding:1.5rem;box-shadow:0 14px 30px rgba(11,30,63,.12)">
               <span class="chip chip-blue">${esc(q.topic)}</span>
@@ -1300,6 +1405,16 @@
             // state moved on (host started, question advanced, game
             // finished) but this screen did not, repaint it now.
             if (liveScreenSig(r2) !== liveUiSig) { render(); return; }
+            if (r2.status === "running") {
+              if (!r2.startedAt) r2.startedAt = Date.now();
+              if (!r2.totalSeconds) r2.totalSeconds = r2.questionIds.length * TOTAL_SECONDS_PER_QUESTION;
+              const tl = liveTotalLeft(r2);
+              const tClock = document.getElementById("live-total-clock");
+              const tFill = document.getElementById("live-total-fill");
+              if (tClock) { tClock.textContent = `⏱️ মোট সময় ${fmtClock(tl)}`; if (tl <= 60) tClock.style.color = "#f43f5e"; }
+              if (tFill) { tFill.style.width = `${Math.max(0, (tl / r2.totalSeconds) * 100)}%`; if (tl <= 60) tFill.style.background = "#f43f5e"; }
+              if (tl <= 0) { finishLiveRoom(r2); return; }
+            }
             if (r2.status === "running" && r2.deadlineAt) {
               const s = Math.max(0, Math.ceil((r2.deadlineAt - Date.now()) / 1000));
               if (s !== lastClockSec) {
@@ -1549,9 +1664,9 @@
 
         $app.innerHTML = `
         <div class="wrap wrap-3xl" style="padding-top:1rem;padding-bottom:2.5rem">
-          <header style="display:flex;align-items:center;justify-content:space-between;gap:.75rem">
-            <div class="card" style="border-radius:16px;padding:.5rem .75rem">${brandHtml(true)}</div>
-            <div style="display:flex;flex-shrink:0;gap:.5rem">
+          <header class="app-header">
+            <div class="card brand-card" style="border-radius:16px;padding:.5rem .75rem">${brandHtml(true)}</div>
+            <div class="header-actions">
               <button id="adm-home" class="btn-ghost blue" style="border:0">🏠 হোম</button>
               <button id="adm-logout" class="btn-ghost" style="border:0">Logout ⎋</button>
             </div>
