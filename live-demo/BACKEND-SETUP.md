@@ -36,7 +36,7 @@ created, the page keeps working exactly as before (browser-only storage).
 - `GET /api/me`, `PUT /api/me` — own profile + full quiz history.
 - `POST /api/sync` — browser pushes current user + attempts (merge by
   id+date, so two devices never overwrite each other).
-- `GET /api/admin/overview` — admin only (arghapaulnillarghapaul@gmail.com):
+- `GET /api/admin` — admin only (arghapaulnillarghapaul@gmail.com):
   total students, total attempts, every student's history. Password hashes
   are never sent to any client.
 - `GET /api/health` — `{ ok, storage: "upstash-redis" | "unconfigured" }`.

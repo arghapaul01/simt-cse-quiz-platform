@@ -197,7 +197,7 @@
   /* ---------- admin overview: all students + their history ---------- */
   function loadAdmin() {
     if (server.adminLoaded || !server.enabled || !token()) return;
-    api("/api/admin/overview")
+    api("/api/admin")
       .then(readJson)
       .then(function (x) {
         if (!x.d.ok) return;
