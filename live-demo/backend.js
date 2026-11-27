@@ -35,6 +35,49 @@
     return r.json().then(function (d) { return { status: r.status, d: d }; });
   }
 
+  /* One quiz, one record: a quiz is identified by its local attempt id +
+     creation time (the same key the server uses to merge in api/_lib.js).
+     A local copy of a quiz the server already has, filed under another
+     (stale) user id, is the same quiz — not a second student's quiz. */
+  function attemptKey(a) { return a.id + "|" + (a.createdAt || ""); }
+
+  /* Merge a server attempt list into the local DB. The server list is the
+     source of truth for that user, and any stale local copy of one of its
+     quizzes is dropped, so the leaderboard shows each student once.
+     Local quizzes of this user that the server does not have yet (not
+     synced) are kept, so a slow sync can never lose a finished quiz. */
+  function mergeServerAttempts(srvUserId, srvAttempts) {
+    var list = Array.isArray(srvAttempts) ? srvAttempts : [];
+    var serverKeys = {};
+    list.forEach(function (a) { if (a) serverKeys[attemptKey(a)] = true; });
+    var others = [], mine = [];
+    DB.attempts.forEach(function (a) {
+      if (!a) return;
+      if (a.userId === srvUserId) {
+        if (!serverKeys[attemptKey(a)]) mine.push(a);
+      } else if (!serverKeys[attemptKey(a)]) {
+        others.push(a);
+      }
+    });
+    DB.attempts = others.concat(mine, list);
+  }
+
+  /* Pull the logged-in user's history from the server and re-render, so
+     home stats and history fill in right after login instead of staying
+     empty until the next manual reload. */
+  function pullServerData() {
+    return api("/api/me")
+      .then(readJson)
+      .then(function (x) {
+        if (x.status === 401 || !x.d.ok) { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} return; }
+        mergeServerAttempts(x.d.user.id, x.d.attempts);
+        try { saveDB(); } catch (e) {}
+        render();
+        if (x.d.user.isAdmin) loadAdmin();
+      })
+      .catch(function () { /* server unreachable — keep local data */ });
+  }
+
   /* ---------- session restore: push local data first, then pull server data ---------- */
   function restoreSession() {
     var tok = token();
@@ -52,9 +95,8 @@
       .then(readJson)
       .then(function (x) {
         if (x.status === 401 || !x.d.ok) { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} return; }
-        applyServerUser(x.d.user, tok, { skipTokenSave: true });
-        var srvAttempts = Array.isArray(x.d.attempts) ? x.d.attempts : [];
-        DB.attempts = DB.attempts.filter(function (a) { return a.userId !== x.d.user.id; }).concat(srvAttempts);
+        applyServerUser(x.d.user, tok, { skipTokenSave: true, skipPull: true });
+        mergeServerAttempts(x.d.user.id, x.d.attempts);
         try { saveDB(); } catch (e) {}
         render();
         if (x.d.user.isAdmin) loadAdmin();
@@ -134,6 +176,9 @@
     view = srvUser.isAdmin ? "admin" : "home";
     try { saveDB(); } catch (e) {}
     render();
+    // Fetch the server history now: without this, stats/history stay empty
+    // until the next page reload (restoreSession is the only other pull).
+    if (!opts.skipPull) pullServerData();
     if (srvUser.isAdmin) loadAdmin();
     else queueSync();
   }
@@ -255,8 +300,7 @@
               createdAt: su.createdAt, lastLoginAt: su.lastLoginAt,
             });
           }
-          DB.attempts = DB.attempts.filter(function (a) { return a.userId !== su.id; })
-            .concat(Array.isArray(su.attempts) ? su.attempts : []);
+          mergeServerAttempts(su.id, su.attempts);
         });
         try { saveDB(); } catch (e) {}
         if (view === "admin") render();
