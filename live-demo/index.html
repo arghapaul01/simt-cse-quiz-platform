@@ -1134,21 +1134,57 @@
       const getRoom = () => DB.liveRooms.find((r) => r.id === liveRoomId) || null;
 
       const newLivePlayer = (userId) => ({ userId, answers: [], correct: 0, wrong: 0, totalTimeMs: 0 });
+      /* New-room rule: a new room must draw a fresh set, different from
+         the previous room's set. sameIdSet compares full sequences (same
+         ids in the same order); freshRoomSet re-draws until the set
+         differs from the host's last room and the latest room overall. */
+      const sameIdSet = (a, b) => {
+        // Unordered set comparison: the same questions in any order is
+        // still the same set, so a new room must not reuse the previous
+        // room's questions at all.
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+        const setB = new Set(b);
+        return a.every((v) => setB.has(v));
+      };
+      const prevRoomSets = () => {
+        const rooms = DB.liveRooms.filter((r) => r && Array.isArray(r.questionIds) && r.questionIds.length);
+        const sorted = rooms.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        const mine = sorted.find((r) => r.hostId === me().id);
+        const sets = [];
+        if (mine) sets.push(mine.questionIds);
+        if (sorted[0] && (!mine || sorted[0].id !== mine.id)) sets.push(sorted[0].questionIds);
+        return sets;
+      };
+      const freshRoomSet = (category, count, userId) => {
+        const prev = prevRoomSets();
+        let ids = null;
+        for (let tries = 0; tries < 10; tries++) {
+          ids = drawQuestions(category, count, userId).map((q) => q.id);
+          if (!prev.some((p) => sameIdSet(p, ids))) return ids;
+        }
+        return ids; // server still enforces it, so a 10th identical draw is rejected there
+      };
       const createLiveRoom = () => {
         const user = me();
         const srv = window.__simtServer;
         if (srv && srv.enabled && srv.liveCreate) {
-          const questions = drawQuestions(liveCategory, liveQCount, user.id);
-          srv.liveCreate(liveCategory, liveQCount, questions.map((q) => q.id))
-            .then((x) => {
-              if (x && x.ok && x.room) {
-                srv.mirrorServerRoom(x.room);
-                liveRoomId = SRV_ROOM_ID_OFFSET + x.room.id;
-                liveErr = ""; liveUiSig = ""; render();
-              } else if (x && x.error) { liveErr = x.error; render(); }
-              else createLocalLiveRoom();
-            })
-            .catch(() => createLocalLiveRoom());
+          let tries = 0;
+          const attempt = () => {
+            const ids = freshRoomSet(liveCategory, liveQCount, user.id);
+            srv.liveCreate(liveCategory, liveQCount, ids)
+              .then((x) => {
+                if (x && x.ok && x.room) {
+                  srv.mirrorServerRoom(x.room);
+                  liveRoomId = SRV_ROOM_ID_OFFSET + x.room.id;
+                  liveErr = ""; liveUiSig = ""; render();
+                } else if (x && x.sameAsPrevious && tries < 5) {
+                  tries += 1; attempt(); // server saw the previous room's set — draw fresh and retry
+                } else if (x && x.error) { liveErr = x.error; render(); }
+                else createLocalLiveRoom();
+              })
+              .catch(() => createLocalLiveRoom());
+          };
+          attempt();
           return;
         }
         createLocalLiveRoom();
@@ -1157,8 +1193,8 @@
         const user = me();
         let code;
         do { code = String(Math.floor(100000 + Math.random() * 900000)); } while (DB.liveRooms.some((r) => r.code === code && r.status !== "finished"));
-        const questions = drawQuestions(liveCategory, liveQCount, user.id);
-        const room = { id: DB.nextRoomId++, code, hostId: user.id, category: liveCategory, questionIds: questions.map((q) => q.id), status: "lobby", currentIndex: 0, deadlineAt: null, createdAt: new Date().toISOString(), players: {} };
+        const ids = freshRoomSet(liveCategory, liveQCount, user.id);
+        const room = { id: DB.nextRoomId++, code, hostId: user.id, category: liveCategory, questionIds: ids, status: "lobby", currentIndex: 0, deadlineAt: null, createdAt: new Date().toISOString(), players: {} };
         room.players[user.id] = newLivePlayer(user.id);
         DB.liveRooms.push(room);
         liveRoomId = room.id; liveErr = ""; liveUiSig = "";

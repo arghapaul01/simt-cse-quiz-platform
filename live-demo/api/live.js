@@ -9,6 +9,15 @@
      host-only; everyone in the room answers the same questions (the
      questionIds the host drew once from the shared 813-question bank
      and stored in the room at creation — never re-drawn per player).
+   - New-room rule: every new room draws a FRESH set, different from the
+     previous room's set — never the same set twice in a row. The server
+     compares a create request's questionIds against the host's last set
+     and the globally most recent set (keys lastroomset:<hostId> and
+     lastroomset:global) and rejects an identical set with
+     sameAsPrevious; the client then re-draws and retries. Inside one
+     room every player still gets the identical set in the identical
+     order, and a finished room stays closed (join after finish is
+     rejected).
    - Answers are stored compactly per player: [selectedIndex, correct, timeMs]
      per question index (null = unanswered). Correctness is computed on the
      server from the selectedIndex + correctIndex the client sends, never
@@ -35,6 +44,20 @@ const MAX_EVENTS_PER_USER = 50;
 const MAX_PHOTO_IN_ROOM = 32 * 1024; // chars of data URL
 const MAX_ROOM_JSON = 850 * 1024;
 const FULL_MSG = "রুম ভরে গেছে — এক রুমে সর্বোচ্চ ৫০ জন।";
+
+/* New-room rule helpers: the last question set drawn by a host, and the
+   most recent set drawn by anyone, so a new room can be checked against
+   the previous room's set. */
+function lastSetKey(hostId) { return "lastroomset:" + hostId; }
+const GLOBAL_LAST_SET_KEY = "lastroomset:global";
+function sameIdSet(a, b) {
+  // Unordered set comparison: the same questions in any order is still
+  // the same set, so a new room must not reuse the previous room's
+  // questions at all.
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((v) => setB.has(v));
+}
 
 function roomKey(id) { return "room:" + id; }
 function roomCodeKey(code) { return "room:code:" + code; }
@@ -237,6 +260,17 @@ module.exports = async (req, res) => {
     ) {
       return lib.send(res, 400, { error: "প্রশ্নের তালিকাটা ঠিক নেই — আবার চেষ্টা করো।" });
     }
+    // New-room rule: the set must differ from the previous room's set.
+    // The host draws client-side, so compare the submitted set against
+    // the host's last set and the globally most recent set; an identical
+    // set is rejected and the client re-draws and retries.
+    const prevHostRaw = await lib.kvGet(lastSetKey(user.id));
+    const prevGlobalRaw = await lib.kvGet(GLOBAL_LAST_SET_KEY);
+    const prevHost = prevHostRaw ? JSON.parse(prevHostRaw) : null;
+    const prevGlobal = prevGlobalRaw ? JSON.parse(prevGlobalRaw) : null;
+    if (sameIdSet(questionIds, prevHost) || sameIdSet(questionIds, prevGlobal)) {
+      return lib.send(res, 409, { error: "আগের রুমের প্রশ্নের সেটটাই আবার এসেছে — নতুন করে প্রশ্ন তোলা হচ্ছে।", sameAsPrevious: true });
+    }
     let code = "";
     for (let tries = 0; tries < 8; tries++) {
       const c = String(100000 + Math.floor(Math.random() * 900000));
@@ -265,6 +299,13 @@ module.exports = async (req, res) => {
     room.players[user.id] = newPlayer(user);
     await lib.kvPipeline([["SADD", roomPlayersKey(id), String(user.id)]]);
     await saveRoom(room);
+    // Remember this set as the previous room's set, for the next create.
+    await lib.kvPipeline([
+      ["SET", lastSetKey(user.id), JSON.stringify(questionIds)],
+      ["EXPIRE", lastSetKey(user.id), String(ROOM_TTL_SECONDS)],
+      ["SET", GLOBAL_LAST_SET_KEY, JSON.stringify(questionIds)],
+      ["EXPIRE", GLOBAL_LAST_SET_KEY, String(ROOM_TTL_SECONDS)],
+    ]);
     return lib.send(res, 200, { ok: true, room: publicRoom(room) });
   }
 

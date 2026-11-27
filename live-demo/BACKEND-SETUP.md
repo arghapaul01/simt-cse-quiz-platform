@@ -64,6 +64,15 @@ one phone could not be joined from another phone. Now rooms live in Redis:
 - `POST /api/live { action: "create", category, questionCount: 30|50, questionIds }`
   — host becomes player 1; the host draws the questions from the shared
   813-question bank, so everyone answers the same set.
+- New-room rule: every new room draws a FRESH set, different from the
+  previous room's set — never the same set twice in a row. The server
+  compares a create's questionIds with the host's last set and the
+  globally most recent set (Redis keys `lastroomset:<hostId>` and
+  `lastroomset:global`) and rejects an identical set with
+  `409 { sameAsPrevious: true }`; the client then re-draws and retries
+  (up to 5 times). The local fallback re-draws the same way. Inside one
+  room every player still gets the identical set in the identical order,
+  and a finished room stays closed (join after finish is rejected).
 - `POST /api/live { action: "join", code }` — join by 6-digit code, lobby only.
   The 51st join is rejected: `409 "রুম ভরে গেছে — এক রুমে সর্বোচ্চ ৫০ জন।"`
 - `GET /api/live?action=room&roomId=…` — poll every ~2 s; the server advances
