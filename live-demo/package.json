@@ -1,0 +1,1 @@
+{"description":"SIMT CSE Quiz Platform — static live demo + Vercel serverless API (Upstash Redis). No dependencies: the API uses only Node.js built-ins (crypto, fetch).","engines":{"node":">=18"},"name":"simt-cse-quiz-platform-live-demo","private":true,"type":"commonjs","version":"1.0.0"}
