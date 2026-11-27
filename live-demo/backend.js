@@ -179,6 +179,7 @@
     // Fetch the server history now: without this, stats/history stay empty
     // until the next page reload (restoreSession is the only other pull).
     if (!opts.skipPull) pullServerData();
+    pullLiveEvents();
     if (srvUser.isAdmin) loadAdmin();
     else queueSync();
   }
@@ -304,6 +305,130 @@
         });
         try { saveDB(); } catch (e) {}
         if (view === "admin") render();
+      })
+      .catch(function () {});
+  }
+
+  /* ---------- server-backed Live Group Quiz rooms ----------
+     Rooms live in Redis (/api/live), so players on different phones can
+     join the same room by code. The page keeps a local mirror of any
+     server room in DB.liveRooms (id = SRV_ROOM_ID_OFFSET + server id),
+     so the lobby, live leaderboard, history and wrong-answer explanations
+     render exactly as they did for local rooms. When the server is off
+     or unreachable, index.html falls back to local-only rooms. */
+  var SRV_ROOM_ID_OFFSET = 1000000;
+  var LIVE_POLL_MS = 2000;
+  var lastLivePoll = 0;
+
+  function mergeRoomUser(su) {
+    if (!su || !su.id) return;
+    if (!su.email) {
+      var byId = DB.users.find(function (x) { return x.id === su.id; });
+      if (byId) {
+        byId.name = su.name; byId.studentId = su.studentId;
+        if (su.photo) byId.photo = su.photo;
+      } else {
+        DB.users.push({ id: su.id, name: su.name, studentId: su.studentId, email: "", passwordHash: "", isAdmin: false, photo: su.photo || null, createdAt: new Date().toISOString(), lastLoginAt: null });
+      }
+      return;
+    }
+    var local = ensureServerUserId(su);
+    if (local) {
+      local.name = su.name; local.studentId = su.studentId;
+      if (su.photo) local.photo = su.photo;
+    } else {
+      DB.users.push({ id: su.id, name: su.name, studentId: su.studentId, email: su.email, passwordHash: "", isAdmin: false, photo: su.photo || null, createdAt: new Date().toISOString(), lastLoginAt: null });
+    }
+  }
+
+  /* Convert a server room into the local mirror shape (compact server
+     answers [sel, correct, timeMs] become the {questionId, selectedIndex,
+     correct, timeMs} objects the page renders) and store it in
+     DB.liveRooms. Returns the local mirror id. */
+  function mirrorServerRoom(srv) {
+    if (!srv || !srv.id) return null;
+    var localId = SRV_ROOM_ID_OFFSET + srv.id;
+    var room = {
+      id: localId, serverId: srv.id, code: srv.code, hostId: srv.hostId,
+      category: srv.category, questionIds: (srv.questionIds || []).slice(),
+      status: srv.status, currentIndex: srv.currentIndex,
+      deadlineAt: srv.deadlineAt, totalSeconds: srv.totalSeconds,
+      startedAt: srv.startedAt, createdAt: srv.createdAt,
+      players: {},
+    };
+    if (srv.attendees) room.attendees = srv.attendees;
+    if (srv.rank) room.rank = srv.rank;
+    Object.keys(srv.players || {}).forEach(function (uid) {
+      var sp = srv.players[uid];
+      var answers = [];
+      (sp.answers || []).forEach(function (a, idx) {
+        if (a) answers[idx] = { questionId: srv.questionIds[idx], selectedIndex: a[0], correct: !!a[1], timeMs: a[2] };
+      });
+      room.players[sp.userId] = { userId: sp.userId, answers: answers, correct: sp.correct, wrong: sp.wrong, totalTimeMs: sp.totalTimeMs };
+      mergeRoomUser({ id: sp.userId, name: sp.name, studentId: sp.studentId, email: sp.email || "", photo: sp.photo || null });
+    });
+    var i = DB.liveRooms.findIndex(function (r) { return r.id === localId; });
+    if (i >= 0) DB.liveRooms[i] = room; else DB.liveRooms.push(room);
+    try { saveDB(); } catch (e) {}
+    return localId;
+  }
+  server.mirrorServerRoom = mirrorServerRoom;
+
+  function liveCreate(category, qcount, questionIds) {
+    return api("/api/live", { method: "POST", body: { action: "create", category: category, questionCount: qcount, questionIds: questionIds } }).then(readJson).then(function (x) { return x.d; });
+  }
+  function liveJoin(code) {
+    return api("/api/live", { method: "POST", body: { action: "join", code: code } }).then(readJson).then(function (x) { return x.d; });
+  }
+  function liveStart(serverId) {
+    return api("/api/live", { method: "POST", body: { action: "start", roomId: serverId } }).then(readJson).then(function (x) { return x.d; });
+  }
+  function liveAnswer(serverId, index, selectedIndex, correctIndex) {
+    return api("/api/live", { method: "POST", body: { action: "answer", roomId: serverId, index: index, selectedIndex: selectedIndex, correctIndex: correctIndex } }).then(readJson).then(function (x) { return x.d; });
+  }
+  function liveFinish(serverId) {
+    return api("/api/live", { method: "POST", body: { action: "finish", roomId: serverId } }).then(readJson).then(function (x) { return x.d; });
+  }
+  server.liveCreate = liveCreate;
+  server.liveJoin = liveJoin;
+  server.liveStart = liveStart;
+  server.liveAnswer = liveAnswer;
+  server.liveFinish = liveFinish;
+
+  /* Poll the current server room (every LIVE_POLL_MS) while on the live
+     view, so joins, start, questions and the leaderboard stay in sync
+     across devices. */
+  function liveTick() {
+    if (!server.enabled || view !== "live" || !liveRoomId) return;
+    var room = null;
+    try { room = getRoom(); } catch (e) { room = null; }
+    if (!room || !room.serverId) return;
+    var now = Date.now();
+    if (now - lastLivePoll < LIVE_POLL_MS) return;
+    lastLivePoll = now;
+    api("/api/live?action=room&roomId=" + room.serverId)
+      .then(readJson)
+      .then(function (x) { if (x.d && x.d.ok && x.d.room) mirrorServerRoom(x.d.room); })
+      .catch(function () { /* unreachable — keep the last known state */ });
+  }
+  server.liveTick = liveTick;
+
+  /* Pull finished live-event records from the server so history shows
+     live games on any device, not just the one the game was played on. */
+  function pullLiveEvents() {
+    if (!server.enabled || !token()) return Promise.resolve();
+    return api("/api/live?action=mine")
+      .then(readJson)
+      .then(function (x) {
+        if (!x.d || !x.d.ok || !Array.isArray(x.d.events)) return;
+        var changed = false;
+        x.d.events.forEach(function (ev) {
+          var localId = SRV_ROOM_ID_OFFSET + ev.serverId;
+          if (DB.liveRooms.some(function (r) { return r.id === localId; })) return;
+          mirrorServerRoom(ev);
+          changed = true;
+        });
+        if (changed) { try { saveDB(); } catch (e) {} if (view !== "live") render(); }
       })
       .catch(function () {});
   }

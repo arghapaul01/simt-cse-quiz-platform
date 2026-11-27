@@ -174,6 +174,13 @@
       const DEFAULT_CONTACT = { address: "M/3, Section-14, Mirpur, Dhaka-1216", phone1: "01961 614 776", phone2: "01936 005 818", email: "simt.dhaka@gmail.com", website: "simt.ac.bd" };
       const QUESTION_SECONDS = 30;
       const LIVE_SECONDS = 20;
+      /* Server-backed live rooms (api/live.js): at most 50 players per
+         room including the host. Server rooms are mirrored into
+         DB.liveRooms with ids offset by SRV_ROOM_ID_OFFSET so they can
+         never collide with local room ids (which grow from nextRoomId). */
+      const MAX_LIVE_PLAYERS = 50;
+      const SRV_ROOM_ID_OFFSET = 1000000;
+      const LIVE_ROOM_FULL_MSG = "রুম ভরে গেছে — এক রুমে সর্বোচ্চ ৫০ জন।";
       const SOLO_COUNT = 30;
       /* Overall quiz clock: 30 seconds of total time per question — 15
          minutes for a 30-question quiz, 25 minutes for 50 questions. */
@@ -1100,6 +1107,25 @@
       const newLivePlayer = (userId) => ({ userId, answers: [], correct: 0, wrong: 0, totalTimeMs: 0 });
       const createLiveRoom = () => {
         const user = me();
+        const srv = window.__simtServer;
+        if (srv && srv.enabled && srv.liveCreate) {
+          const questions = drawQuestions(liveCategory, liveQCount, user.id);
+          srv.liveCreate(liveCategory, liveQCount, questions.map((q) => q.id))
+            .then((x) => {
+              if (x && x.ok && x.room) {
+                srv.mirrorServerRoom(x.room);
+                liveRoomId = SRV_ROOM_ID_OFFSET + x.room.id;
+                liveErr = ""; liveUiSig = ""; render();
+              } else if (x && x.error) { liveErr = x.error; render(); }
+              else createLocalLiveRoom();
+            })
+            .catch(() => createLocalLiveRoom());
+          return;
+        }
+        createLocalLiveRoom();
+      };
+      const createLocalLiveRoom = () => {
+        const user = me();
         let code;
         do { code = String(Math.floor(100000 + Math.random() * 900000)); } while (DB.liveRooms.some((r) => r.code === code && r.status !== "finished"));
         const questions = drawQuestions(liveCategory, liveQCount, user.id);
@@ -1111,10 +1137,31 @@
       };
       const joinLiveRoom = (code) => {
         const user = me();
-        const room = DB.liveRooms.find((r) => r.code === code);
+        const srv = window.__simtServer;
+        if (srv && srv.enabled && srv.liveJoin) {
+          srv.liveJoin(code)
+            .then((x) => {
+              if (x && x.ok && x.room) {
+                srv.mirrorServerRoom(x.room);
+                liveRoomId = SRV_ROOM_ID_OFFSET + x.room.id;
+                liveErr = ""; liveUiSig = ""; render();
+              } else if (x && x.error) { liveErr = x.error; render(); }
+              else joinLocalLiveRoom(code);
+            })
+            .catch(() => joinLocalLiveRoom(code));
+          return;
+        }
+        joinLocalLiveRoom(code);
+      };
+      const joinLocalLiveRoom = (code) => {
+        const user = me();
+        // Mirrors of server rooms are not real local rooms: joining one
+        // would split the game (the host would never see this player).
+        const room = DB.liveRooms.find((r) => r.code === code && !r.serverId);
         if (!room) { liveErr = "এই কোডে কোনো রুম পাওয়া যায়নি। কোডটা আবার চেক করো।"; return render(); }
         if (room.status === "finished") { liveErr = "এই রুমের খেলা শেষ হয়ে গেছে। নতুন রুমে জয়েন করো।"; return render(); }
         if (room.status === "running") { liveErr = "এই রুমের খেলা ইতিমধ্যে শুরু হয়ে গেছে — এখন আর জয়েন করা যাবে না।"; return render(); }
+        if (Object.keys(room.players).length >= MAX_LIVE_PLAYERS && !room.players[user.id]) { liveErr = LIVE_ROOM_FULL_MSG; return render(); }
         if (!room.players[user.id]) room.players[user.id] = newLivePlayer(user.id);
         liveRoomId = room.id; liveErr = ""; liveUiSig = "";
         render();
@@ -1136,6 +1183,18 @@
         const room = getRoom();
         const user = me();
         if (!room || !user || room.hostId !== user.id) return;
+        if (room.serverId) {
+          const srv = window.__simtServer;
+          if (srv && srv.enabled && srv.liveStart) {
+            srv.liveStart(room.serverId)
+              .then((x) => {
+                if (x && x.ok && x.room) { srv.mirrorServerRoom(x.room); liveUiSig = ""; render(); }
+                else if (x && x.error) { liveErr = x.error; render(); }
+              })
+              .catch(() => { liveErr = "সার্ভারে যোগাযোগ হচ্ছে না — আবার চেষ্টা করো।"; render(); });
+          }
+          return;
+        }
         if (room.status === "lobby") {
           room.status = "running";
           room.currentIndex = 0;
@@ -1155,6 +1214,21 @@
         if (!room || room.status !== "running") return;
         const p = room.players[user.id];
         if (!p || p.answers[room.currentIndex]) return;
+        if (room.serverId) {
+          const qid = room.questionIds[room.currentIndex];
+          const q = DB.questions.find((x) => x.id === qid);
+          if (!q) return;
+          const srv = window.__simtServer;
+          if (srv && srv.enabled && srv.liveAnswer) {
+            srv.liveAnswer(room.serverId, room.currentIndex, sel, q.correctIndex)
+              .then((x) => {
+                if (x && x.ok && x.room) { srv.mirrorServerRoom(x.room); liveUiSig = ""; render(); }
+                else if (x && x.error) { liveErr = x.error; render(); }
+              })
+              .catch(() => {});
+          }
+          return;
+        }
         const qid = room.questionIds[room.currentIndex];
         const q = DB.questions.find((x) => x.id === qid);
         const elapsed = Math.max(0, LIVE_SECONDS * 1000 - (room.deadlineAt - Date.now()));
@@ -1167,6 +1241,7 @@
       };
       const advanceLiveIfNeeded = () => {
         const room = getRoom();
+        if (room && room.serverId) return; // the server advances on poll
         if (!room || room.status !== "running" || !room.deadlineAt) return;
         const now = Date.now();
         if (now <= room.deadlineAt) return;
@@ -1195,6 +1270,15 @@
       };
       const finishLiveRoom = (room) => {
         if (!room || room.status !== "running") return;
+        if (room.serverId) {
+          const srv = window.__simtServer;
+          if (srv && srv.enabled && srv.liveFinish) {
+            srv.liveFinish(room.serverId)
+              .then((x) => { if (x && x.ok && x.room) { srv.mirrorServerRoom(x.room); liveUiSig = ""; render(); } })
+              .catch(() => {});
+          }
+          return;
+        }
         room.questionIds.forEach((qid, idx) => {
           Object.values(room.players).forEach((p) => {
             if (!p.answers[idx]) {
@@ -1254,7 +1338,7 @@
             <p class="font-display" style="margin:.25rem 0 0;font-size:48px;font-weight:800;letter-spacing:.2em">${esc(room.code)}</p>
             <p style="margin:.25rem 0 0;font-size:14px;color:var(--dim)">${esc(room.category)} • ${room.questionIds.length}টি প্রশ্ন • প্রতি প্রশ্নে ২০ সেকেন্ড • মোট সময় ${room.questionIds.length * TOTAL_SECONDS_PER_QUESTION / 60} মিনিট</p>
             <div style="margin-top:1.25rem;text-align:left">
-              <p style="margin:0;font-size:14px;font-weight:700">👥 জয়েন করেছে (${players.length} জন) — লাইভ আপডেট হয়</p>
+              <p style="margin:0;font-size:14px;font-weight:700">👥 জয়েন করেছে (${players.length}/${MAX_LIVE_PLAYERS} জন) — লাইভ আপডেট হয়</p>
               <div style="margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.5rem">
                 ${players.map((p) => { const pu = DB.users.find((u) => u.id === p.userId); return pu ? `<span class="anim-pop" style="display:flex;align-items:center;gap:.5rem;border-radius:999px;background:var(--surface2);padding:.25rem .8rem .25rem .25rem;outline:1px solid var(--border);outline-offset:-1px">${avatarHtml(pu, 28, 11)}<span style="font-size:13px;font-weight:700">${esc(pu.name)}${pu.id === user.id ? " (তুমি)" : ""}</span><span style="font-size:11px;color:var(--dim)">${esc(pu.studentId || "")}</span></span>` : ""; }).join("")}
               </div>
@@ -1400,6 +1484,8 @@
           let lastClockSec = -1;
           liveTickTimer = setInterval(() => {
             if (view !== "live") { stopLiveTimer(); return; }
+            const srv = window.__simtServer;
+            if (srv && srv.liveTick) srv.liveTick();
             advanceLiveIfNeeded();
             const r2 = getRoom();
             if (!r2) { stopLiveTimer(); return; }
@@ -1408,8 +1494,10 @@
             // finished) but this screen did not, repaint it now.
             if (liveScreenSig(r2) !== liveUiSig) { render(); return; }
             if (r2.status === "running") {
-              if (!r2.startedAt) r2.startedAt = Date.now();
-              if (!r2.totalSeconds) r2.totalSeconds = r2.questionIds.length * TOTAL_SECONDS_PER_QUESTION;
+              if (!r2.serverId) {
+                if (!r2.startedAt) r2.startedAt = Date.now();
+                if (!r2.totalSeconds) r2.totalSeconds = r2.questionIds.length * TOTAL_SECONDS_PER_QUESTION;
+              }
               const tl = liveTotalLeft(r2);
               const tClock = document.getElementById("live-total-clock");
               const tFill = document.getElementById("live-total-fill");

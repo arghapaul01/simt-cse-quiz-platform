@@ -36,15 +36,45 @@ created, the page keeps working exactly as before (browser-only storage).
 - `GET /api/me`, `PUT /api/me` — own profile + full quiz history.
 - `POST /api/sync` — browser pushes current user + attempts (merge by
   id+date, so two devices never overwrite each other).
-- `GET /api/admin` — admin only (arghapaulnillarghapaul@gmail.com):
+- `GET /api/admin/overview` — admin only (arghapaulnillarghapaul@gmail.com):
   total students, total attempts, every student's history. Password hashes
   are never sent to any client.
 - `GET /api/health` — `{ ok, storage: "upstash-redis" | "unconfigured" }`.
+- `POST /api/live` + `GET /api/live` — server-backed Live Group Quiz rooms
+  (see "Live rooms" below). Max **50 players per room** including the host.
+
+## Live rooms (server-backed)
+
+Rooms used to live only in the browser that created them, so a room made on
+one phone could not be joined from another phone. Now rooms live in Redis:
+
+- `POST /api/live { action: "create", category, questionCount: 30|50, questionIds }`
+  — host becomes player 1; the host draws the questions from the shared
+  813-question bank, so everyone answers the same set.
+- `POST /api/live { action: "join", code }` — join by 6-digit code, lobby only.
+  The 51st join is rejected: `409 "রুম ভরে গেছে — এক রুমে সর্বোচ্চ ৫০ জন।"`
+- `GET /api/live?action=room&roomId=…` — poll every ~2 s; the server advances
+  the room (per-question 20 s deadline, 15 min total for 30 questions,
+  25 min for 50) before answering, so all devices see the same state.
+- `POST /api/live { action: "start" | "answer" | "finish", roomId, … }` —
+  start is host-only; answers send selectedIndex + correctIndex and the
+  server computes correct/wrong and the elapsed time.
+- `GET /api/live?action=mine` — finished live-event records for the
+  logged-in user, so live history shows on any device.
+- Rooms expire after 7 days. If the server is unreachable, the page falls
+  back to local-only rooms with the same 50-player cap and lobby rules.
+- Known limits: the 50-cap uses SADD + SCARD in one pipeline, so two joins
+  landing in the exact same instant could both slip through (51 players);
+  in a classroom this is effectively impossible, and the local fallback
+  enforces the cap exactly. Polling costs ~1 Redis command per client per
+  2 s (a 50-player room polls ~25 commands/s while playing — fine inside
+  the 10,000/day free tier for a class session, but don't leave the live
+  view open for hours). The admin dashboard shows live events only for
+  rooms on the admin's own device, as before.
 
 ## Notes
 
 - Accounts created while the database was off exist only in that browser.
   After the database is live, everyone signs up once fresh on the server.
-- Live Group Quiz rooms still live in the browser only (unchanged).
 - If the free Redis database is idle for 30 days, Upstash may delete it —
   just create it again the same way; nothing else changes.
