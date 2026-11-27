@@ -1595,6 +1595,9 @@
       let adminSettingsErr = "";
       let adminResetMsg = {};   // studentId -> last reset confirmation (shown once)
       let adminResetErr = {};   // studentId -> last reset error
+      let adminDelMsg = {};     // studentId -> last delete confirmation (shown once)
+      let adminDelErr = {};     // studentId -> last delete error
+      let adminConfirmDeleteUser = null; // student id awaiting delete confirm
 
       const renderAdmin = () => {
         const user = me();
@@ -1692,6 +1695,19 @@
                   ${adminResetMsg[s.id] ? `<p style="margin:.5rem 0 0;font-size:13px;font-weight:700;color:#059669">${esc(adminResetMsg[s.id])}</p>` : ""}
                   ${adminResetErr[s.id] ? `<p role="alert" style="margin:.5rem 0 0;font-size:13px;font-weight:700;color:#e11d48">${esc(adminResetErr[s.id])}</p>` : ""}
                 </div>
+                ${s.id !== user.id ? `
+                <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:.75rem">
+                  <p style="margin:0;font-size:14px;font-weight:700">🗑️ অ্যাকাউন্ট ডিলিট</p>
+                  <p style="margin:.15rem 0 0;font-size:12px;color:var(--dim)">এই শিক্ষার্থীর অ্যাকাউন্ট আর তার সব কুইজ ইতিহাস সার্ভার থেকে পুরোপুরি মুছে যাবে। এই কাজটা ফেরানো যায় না।</p>
+                  ${adminConfirmDeleteUser === s.id ? `
+                  <div style="margin-top:.5rem;display:flex;gap:.5rem">
+                    <button data-del-confirm="${s.id}" style="flex:1;border:0;border-radius:12px;background:#e11d48;padding:.55rem 1rem;font-size:13px;font-weight:800;color:#fff">হ্যাঁ, ডিলিট করো</button>
+                    <button data-del-cancel="${s.id}" style="flex:1;border:0;border-radius:12px;background:var(--surface2);padding:.55rem 1rem;font-size:13px;font-weight:800;color:var(--text)">বাতিল</button>
+                  </div>` : `
+                  <button data-del-btn="${s.id}" style="margin-top:.5rem;border:0;border-radius:12px;background:#fff1f2;padding:.55rem 1rem;font-size:13px;font-weight:800;color:#e11d48;outline:1px solid rgba(244,63,94,.35)">অ্যাকাউন্ট ডিলিট করো</button>`}
+                  ${adminDelMsg[s.id] ? `<p style="margin:.5rem 0 0;font-size:13px;font-weight:700;color:#059669">${esc(adminDelMsg[s.id])}</p>` : ""}
+                  ${adminDelErr[s.id] ? `<p role="alert" style="margin:.5rem 0 0;font-size:13px;font-weight:700;color:#e11d48">${esc(adminDelErr[s.id])}</p>` : ""}
+                </div>` : ""}
               </div>` : ""}
             </article>`;
           }).join("")}
@@ -1902,6 +1918,31 @@
           u.passwordHash = hashPassword(pw);
           saveDB();
           done(`নতুন অস্থায়ী পাসওয়ার্ড সেট হয়েছে: ${pw} — শিক্ষার্থীকে জানিয়ে দাও, লগইন করে সে নিজের পাসওয়ার্ড বদলে নেবে।`);
+        }));
+        $app.querySelectorAll("[data-del-btn]").forEach((b) => b.addEventListener("click", () => { adminConfirmDeleteUser = Number(b.dataset.delBtn); adminDelMsg = {}; adminDelErr = {}; render(); }));
+        $app.querySelectorAll("[data-del-cancel]").forEach((b) => b.addEventListener("click", () => { adminConfirmDeleteUser = null; render(); }));
+        $app.querySelectorAll("[data-del-confirm]").forEach((b) => b.addEventListener("click", () => {
+          const id = Number(b.dataset.delConfirm);
+          const done = (name) => {
+            DB.users = DB.users.filter((x) => x.id !== id);
+            DB.attempts = DB.attempts.filter((a) => a.userId !== id);
+            try { saveDB(); } catch (e) {}
+            adminOpenStudent = null; adminConfirmDeleteUser = null;
+            adminDelMsg = {}; adminDelErr = {};
+            adminMsg = `${name} — অ্যাকাউন্ট ডিলিট হয়েছে ✔`;
+            render();
+          };
+          const srv = window.__simtServer;
+          if (srv && srv.enabled && srv.deleteUser) {
+            srv.deleteUser(id).then((x) => {
+              if (x && x.d && x.d.ok) done(x.d.deleted ? x.d.deleted.name : "");
+              else { adminDelErr[id] = (x && x.d && x.d.error) || "ডিলিট হয়নি, আবার চেষ্টা করো।"; render(); }
+            }).catch(() => { adminDelErr[id] = "সার্ভারে যোগাযোগ হচ্ছে না।"; render(); });
+            return;
+          }
+          const u = DB.users.find((x) => x.id === id);
+          if (!u) { adminDelErr[id] = "শিক্ষার্থী পাওয়া যায়নি।"; return render(); }
+          done(u.name);
         }));
 
         if (adminTab === "questions") {

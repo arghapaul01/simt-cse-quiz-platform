@@ -326,6 +326,12 @@
   server.resetPassword = function (userId, newPassword) {
     return api("/api/admin", { method: "POST", body: { action: "reset-password", userId: userId, newPassword: newPassword } }).then(readJson);
   };
+  server.deleteUser = function (userId) {
+    return api("/api/admin", { method: "POST", body: { action: "delete-user", userId: userId } }).then(readJson);
+  };
+  server.deleteRoom = function (roomId) {
+    return api("/api/admin", { method: "POST", body: { action: "delete-room", roomId: roomId } }).then(readJson);
+  };
 
   /* ---------- public leaderboard feed: every real account, live ----------
      /api/leaderboard needs no login, so any student's browser can show

@@ -44,6 +44,15 @@ created, the page keeps working exactly as before (browser-only storage).
   The student's current password is never shown and cannot be recovered
   (one-way scrypt hashes); the new password is never returned or stored
   in plaintext.
+- `POST /api/admin { action: "delete-user", userId }` — admin only:
+  permanently deletes that student's account and all their quiz attempts
+  from the server. The admin's own account cannot be deleted this way.
+  The Admin Dashboard has a two-click Delete button on each student's
+  detail (hidden on the admin's own row). Deletion cannot be undone.
+- `POST /api/admin { action: "delete-room", roomId }` — admin only:
+  deletes a live room (record, code lookup, players set) before its
+  7-day expiry. The lastroomset:* keys are left alone so the next room
+  still has to draw a set different from the previous room's set.
 - `GET /api/leaderboard` — public, no login: every registered student
   with quiz aggregates only (name, Student ID, photo, attempts, correct,
   total, best %). No emails, no answers, no password data. The page

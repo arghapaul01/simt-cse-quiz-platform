@@ -8,7 +8,15 @@
    CURRENT password is never shown and cannot be recovered — passwords
    are stored only as one-way scrypt hashes. The new password itself is
    never returned or stored in plaintext; the admin typed it and tells
-   it to the student directly. */
+   it to the student directly.
+   POST { action: "delete-user", userId }: admin only — permanently
+   deletes that student's account and all their quiz attempts from the
+   server (user:email, user:id, attempts, users:ids). The admin's own
+   account cannot be deleted this way. Deletion cannot be undone.
+   POST { action: "delete-room", roomId }: admin only — deletes a live
+   room (room record, code lookup, players set) before its 7-day expiry.
+   The lastroomset:* keys are left alone: the next room must still draw
+   a set different from the previous room's set. */
 const lib = require("./_lib");
 
 module.exports = async (req, res) => {
@@ -25,20 +33,53 @@ module.exports = async (req, res) => {
   }
 
   if (req.method === "POST") {
-    let allowed = true;
-    try { allowed = await lib.rateLimit("rl:admin-reset:" + userId, 10, 600); } catch (e) { allowed = true; }
-    if (!allowed) return lib.send(res, 429, { error: "অনেকবার চেষ্টা করা হয়েছে — ১০ মিনিট পর আবার চেষ্টা করো।" });
     let body;
     try { body = await lib.readJson(req); } catch (e) { return lib.send(res, 400, { error: "ভুল ডেটা পাঠানো হয়েছে।" }); }
-    if (body.action !== "reset-password") return lib.send(res, 400, { error: "অজানা অ্যাকশন।" });
-    const targetId = Number(body.userId);
-    const newPassword = String(body.newPassword || "").trim();
-    if (!targetId || !newPassword) return lib.send(res, 400, { error: "শিক্ষার্থী আর নতুন পাসওয়ার্ড দুটোই দরকার।" });
-    const target = await lib.getUserById(targetId);
-    if (!target) return lib.send(res, 404, { error: "শিক্ষার্থী পাওয়া যায়নি।" });
-    target.passwordHash = lib.hashPassword(newPassword);
-    await lib.saveUser(target);
-    return lib.send(res, 200, { ok: true, user: lib.publicUser(target) });
+    const action = body.action;
+    if (action !== "reset-password" && action !== "delete-user" && action !== "delete-room") {
+      return lib.send(res, 400, { error: "অজানা অ্যাকশন।" });
+    }
+    // 10 admin writes per 10 minutes (separate windows for resets vs deletes).
+    const limitKey = (action === "reset-password" ? "rl:admin-reset:" : "rl:admin-delete:") + userId;
+    let allowed = true;
+    try { allowed = await lib.rateLimit(limitKey, 10, 600); } catch (e) { allowed = true; }
+    if (!allowed) return lib.send(res, 429, { error: "অনেকবার চেষ্টা করা হয়েছে — ১০ মিনিট পর আবার চেষ্টা করো।" });
+
+    if (action === "reset-password") {
+      const targetId = Number(body.userId);
+      const newPassword = String(body.newPassword || "").trim();
+      if (!targetId || !newPassword) return lib.send(res, 400, { error: "শিক্ষার্থী আর নতুন পাসওয়ার্ড দুটোই দরকার।" });
+      const target = await lib.getUserById(targetId);
+      if (!target) return lib.send(res, 404, { error: "শিক্ষার্থী পাওয়া যায়নি।" });
+      target.passwordHash = lib.hashPassword(newPassword);
+      await lib.saveUser(target);
+      return lib.send(res, 200, { ok: true, user: lib.publicUser(target) });
+    }
+
+    if (action === "delete-user") {
+      const targetId = Number(body.userId);
+      if (!targetId) return lib.send(res, 400, { error: "শিক্ষার্থী বাছাই করো।" });
+      if (targetId === userId) return lib.send(res, 400, { error: "নিজের অ্যাডমিন অ্যাকাউন্ট ডিলিট করা যাবে না।" });
+      const target = await lib.getUserById(targetId);
+      if (!target) return lib.send(res, 404, { error: "শিক্ষার্থী পাওয়া যায়নি।" });
+      const emailKey = "user:email:" + String(target.email || "").toLowerCase();
+      await lib.kvPipeline([["DEL", emailKey, "user:id:" + targetId, "attempts:" + targetId]]);
+      const ids = await lib.listUserIds();
+      await lib.kvSet("users:ids", JSON.stringify(ids.filter((x) => x !== targetId)));
+      return lib.send(res, 200, { ok: true, deleted: lib.publicUser(target) });
+    }
+
+    // delete-room
+    const roomId = Number(body.roomId);
+    if (!roomId) return lib.send(res, 400, { error: "রুম বাছাই করো।" });
+    const roomRaw = await lib.kvGet("room:" + roomId);
+    if (!roomRaw) return lib.send(res, 404, { error: "রুম পাওয়া যায়নি।" });
+    let roomCode = null;
+    try { roomCode = JSON.parse(roomRaw).code; } catch (e) {}
+    const roomKeys = ["room:" + roomId, "room:" + roomId + ":players"];
+    if (roomCode) roomKeys.push("room:code:" + roomCode);
+    await lib.kvPipeline([["DEL"].concat(roomKeys)]);
+    return lib.send(res, 200, { ok: true, deleted: { id: roomId, code: roomCode } });
   }
 
   const ids = await lib.listUserIds();
