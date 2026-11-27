@@ -199,6 +199,7 @@
       const saveDBNow = () => {
         try {
           localStorage.setItem(LS_DB_KEY, JSON.stringify({ users: DB.users, attempts: DB.attempts, liveRooms: DB.liveRooms, nextUserId: DB.nextUserId, nextAttemptId: DB.nextAttemptId, nextRoomId: DB.nextRoomId, contact: DB.contact, bankLen: BANK_DATA.bank.length, questions: DB.questions, categories: DB.categories }));
+          if (window.__simtServer) window.__simtServer.queueSync();
         } catch (e) { /* storage full or unavailable — the page still works in memory */ }
       };
       const saveDB = () => { clearTimeout(saveDbTimer); saveDbTimer = setTimeout(saveDBNow, 250); };
@@ -544,6 +545,9 @@
 
       const submitAuth = (fd) => {
         authError = "";
+        // Server backend (backend.js): when live, sign-up/login go through the
+        // server so accounts survive logout and work from any device.
+        if (window.__simtServer && window.__simtServer.ready && window.__simtServer.handleAuth(fd, authMode)) return;
         authDraft = { name: String(fd.get("name") || ""), studentId: String(fd.get("studentId") || ""), email: String(fd.get("email") || ""), password: String(fd.get("password") || "") };
         const email = String(fd.get("email") || "").trim().toLowerCase();
         const password = String(fd.get("password") || "");
@@ -1689,5 +1693,6 @@
 
       render();
     </script>
+    <script src="backend.js"></script>
   </body>
 </html>
