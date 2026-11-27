@@ -164,8 +164,9 @@
       const SOLO_COUNT = 30;
 
       /* In-browser data store for this live page: accounts, attempts and
-         live rooms live in memory for the session, exactly like the full
-         platform's database shapes. */
+         live rooms are saved to this browser's localStorage (see the
+         persistence helpers below), exactly like the full platform's
+         database shapes. */
       const DB = {
         users: [],            // {id,name,email,studentId,passwordHash,isAdmin,photo,createdAt,lastLoginAt}
         attempts: [],         // {id,userId,category,score,total,createdAt,answers:[...]}
@@ -183,6 +184,52 @@
       let liveTickTimer = null;
       let quizTickTimer = null;
       let teaserTimer = null;
+
+      /* ---- Persistence (same-browser login) ----
+         This page has no server, so accounts live in this browser's
+         localStorage: users, attempts, live rooms, contact info and
+         admin edits to questions/categories. On load the saved data is
+         restored, so sign-up, photo and history survive a reload and
+         the same email + password logs in again. Nothing here leaves
+         the browser — other devices or browsers cannot see these
+         accounts; that needs the server version. */
+      const LS_DB_KEY = "simt-quiz-db-v1";
+      const LS_SESSION_KEY = "simt-quiz-session-v1";
+      let saveDbTimer = null;
+      const saveDBNow = () => {
+        try {
+          localStorage.setItem(LS_DB_KEY, JSON.stringify({ users: DB.users, attempts: DB.attempts, liveRooms: DB.liveRooms, nextUserId: DB.nextUserId, nextAttemptId: DB.nextAttemptId, nextRoomId: DB.nextRoomId, contact: DB.contact, bankLen: BANK_DATA.bank.length, questions: DB.questions, categories: DB.categories }));
+        } catch (e) { /* storage full or unavailable — the page still works in memory */ }
+      };
+      const saveDB = () => { clearTimeout(saveDbTimer); saveDbTimer = setTimeout(saveDBNow, 250); };
+      const saveSession = () => { try { if (sessionUserId) localStorage.setItem(LS_SESSION_KEY, String(sessionUserId)); else localStorage.removeItem(LS_SESSION_KEY); } catch (e) {} };
+      const loadStoredDB = () => {
+        try {
+          const raw = localStorage.getItem(LS_DB_KEY);
+          if (raw) {
+            const s = JSON.parse(raw);
+            if (Array.isArray(s.users)) DB.users = s.users;
+            if (Array.isArray(s.attempts)) DB.attempts = s.attempts;
+            if (Array.isArray(s.liveRooms)) DB.liveRooms = s.liveRooms;
+            if (s.nextUserId) DB.nextUserId = s.nextUserId;
+            if (s.nextAttemptId) DB.nextAttemptId = s.nextAttemptId;
+            if (s.nextRoomId) DB.nextRoomId = s.nextRoomId;
+            if (s.contact) DB.contact = s.contact;
+            // Restore admin-edited questions/categories only when the
+            // shipped bank is unchanged; a new question batch ships
+            // fresh from BANK_DATA instead of stale stored copies.
+            if (s.bankLen === BANK_DATA.bank.length) {
+              if (Array.isArray(s.questions) && s.questions.length) DB.questions = s.questions;
+              if (Array.isArray(s.categories) && s.categories.length) DB.categories = s.categories;
+            }
+          }
+          const sid = Number(localStorage.getItem(LS_SESSION_KEY) || 0);
+          if (sid && DB.users.some((u) => u.id === sid)) sessionUserId = sid;
+        } catch (e) { /* corrupted or unavailable storage — start fresh */ }
+      };
+      loadStoredDB();
+      window.addEventListener("pagehide", saveDBNow);
+      document.addEventListener("visibilitychange", () => { if (document.hidden) saveDBNow(); });
 
       /* ================= Helpers ================= */
       const $app = document.getElementById("app");
@@ -453,7 +500,7 @@
               </div>
             </div>
             <div style="margin-top:1rem;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;border-radius:24px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.08);padding:1rem 1.25rem;backdrop-filter:blur(12px)">
-              <p style="margin:0;font-size:14px;color:#cbd5e1">📚 <strong style="color:#fff">প্রশ্ন ব্যাংক:</strong> ২৬৮টি প্রশ্ন • ৭টি ক্যাটাগরি • Easy, Medium ও Hard-এর ব্যালান্সড মিক্স</p>
+              <p style="margin:0;font-size:14px;color:#cbd5e1">📚 <strong style="color:#fff">প্রশ্ন ব্যাংক:</strong> ${bnDigit(DB.questions.length)}টি প্রশ্ন • ৭টি ক্যাটাগরি • Easy, Medium ও Hard-এর ব্যালান্সড মিক্স</p>
               <p style="margin:0;font-size:14px;font-weight:600;color:#6ee7b7">প্রত্যেকের নিজের অ্যাকাউন্ট • নিজের স্কোর শুধু নিজের কাছেই 🔒</p>
             </div>
             <div style="margin-top:1rem">${contactHtml(true)}</div>
@@ -512,6 +559,7 @@
           DB.users.push(user);
           authDraft = { name: "", studentId: "", email: "", password: "" };
           sessionUserId = user.id;
+          saveSession();
           view = user.isAdmin ? "admin" : "home";
           return render();
         }
@@ -524,11 +572,12 @@
         if (authMode === "admin" && !user.isAdmin) { authError = "এই অ্যাকাউন্টে অ্যাডমিন অ্যাক্সেস নেই। শুধুমাত্র অ্যাডমিনের নিজের অ্যাকাউন্ট দিয়েই Admin Dashboard খোলা যাবে।"; return renderAuth(); }
         authDraft = { name: "", studentId: "", email: "", password: "" };
         sessionUserId = user.id;
+        saveSession();
         view = user.isAdmin ? "admin" : "home";
         render();
       };
 
-      const logout = () => { sessionUserId = null; quiz = null; liveRoomId = null; authError = ""; view = "home"; render(); };
+      const logout = () => { sessionUserId = null; saveSession(); saveDB(); quiz = null; liveRoomId = null; authError = ""; view = "home"; render(); };
 
       /* ================= Home ================= */
       const categoryCounts = () => { const m = new Map(); DB.questions.forEach((q) => m.set(q.category, (m.get(q.category) || 0) + 1)); return m; };
@@ -1625,6 +1674,7 @@
         stopLiveTimer();
         if (view !== "quiz") stopQuizTimer();
         if (view !== "auth") clearInterval(teaserTimer);
+        saveDB();
         const user = me();
         if (!user) { renderAuth(); return; }
         if (view === "quiz" && quiz) return renderQuiz();
