@@ -13,7 +13,7 @@
    me) — it does not change the design or the question bank. */
 (function () {
   var TOKEN_KEY = "simt-quiz-server-token-v1";
-  var server = { ready: false, enabled: false, syncTimer: null, adminLoaded: false };
+  var server = { ready: false, enabled: false, syncTimer: null, adminLoaded: false, adminLoadedAt: 0, adminLoading: false, board: null, boardLoadedAt: 0, boardLoading: false };
   window.__simtServer = server;
 
   function token() {
@@ -197,10 +197,13 @@
     if (mode === "signup") {
       var name = String(fd.get("name") || "").trim();
       var studentId = String(fd.get("studentId") || "").trim().toUpperCase();
-      if (name.length < 2) return fail("তোমার পুরো নামটা লেখো।");
-      if (!/^CSE-\d{7}$/.test(studentId)) return fail("Student ID সঠিক ফরম্যাটে দাও: CSE-2324001 — CSE- দিয়ে শুরু করে মোট ৭টি সংখ্যা।");
-      if (!email.includes("@")) return fail("সঠিক ইমেইল ঠিকানা দাও।");
-      if (password.length < 4) return fail("পাসওয়ার্ড অন্তত ৪ অক্ষরের হতে হবে।");
+      // Sign-up accepts whatever the user types (any name, department /
+      // Student ID of any length, any email, any password); only an empty
+      // field is rejected. CSE-2324001 stays only as a placeholder example.
+      if (!name) return fail("তোমার নামটা লেখো।");
+      if (!studentId) return fail("Student ID লেখো।");
+      if (!email) return fail("ইমেইল ঠিকানা লেখো।");
+      if (!password) return fail("পাসওয়ার্ড লেখো।");
       authDraft = { name: "", studentId: "", email: "", password: "" };
       api("/api/auth", { method: "POST", body: { action: "signup", name: name, studentId: studentId, email: email, password: password } })
         .then(readJson)
@@ -211,8 +214,8 @@
         .catch(function () { fail("সার্ভারে যোগাযোগ হচ্ছে না — নেট চেক করে আবার চেষ্টা করো।"); });
       return true;
     }
-    if (!email.includes("@")) return fail("সঠিক ইমেইল ঠিকানা দাও।");
-    if (password.length < 4) return fail("পাসওয়ার্ড অন্তত ৪ অক্ষরের হতে হবে।");
+    if (!email) return fail("ইমেইল ঠিকানা লেখো।");
+    if (!password) return fail("পাসওয়ার্ড লেখো।");
     authDraft = { name: "", studentId: "", email: "", password: "" };
     api("/api/auth", { method: "POST", body: { action: "login", email: email, password: password } })
       .then(readJson)
@@ -282,13 +285,24 @@
   server.queueSync = queueSync;
 
   /* ---------- admin overview: all students + their history ---------- */
-  function loadAdmin() {
-    if (server.adminLoaded || !server.enabled || !token()) return;
+  /* Admin overview: refreshable, never once-per-session. A fresh sign-up
+     or a new attempt must reach the Admin Dashboard without logging out:
+     refresh on entering the admin view (throttled to 30s), on a 30s poll
+     while the admin view is open, and on returning to the tab. `force`
+     bypasses the throttle (login / restore); the in-flight guard stops
+     overlapping requests. */
+  function loadAdmin(opts) {
+    opts = opts || {};
+    if (!server.enabled || !token() || server.adminLoading) return;
+    if (!opts.force && Date.now() - server.adminLoadedAt < 30000) return;
+    server.adminLoading = true;
     api("/api/admin")
       .then(readJson)
       .then(function (x) {
+        server.adminLoading = false;
         if (!x.d.ok) return;
         server.adminLoaded = true;
+        server.adminLoadedAt = Date.now();
         x.d.users.forEach(function (su) {
           var local = ensureServerUserId(su);
           if (local) {
@@ -306,8 +320,53 @@
         try { saveDB(); } catch (e) {}
         if (view === "admin") render();
       })
-      .catch(function () {});
+      .catch(function () { server.adminLoading = false; });
   }
+  server.refreshAdmin = function () { loadAdmin({}); };
+  server.resetPassword = function (userId, newPassword) {
+    return api("/api/admin", { method: "POST", body: { action: "reset-password", userId: userId, newPassword: newPassword } }).then(readJson);
+  };
+
+  /* ---------- public leaderboard feed: every real account, live ----------
+     /api/leaderboard needs no login, so any student's browser can show
+     every other player's current profile photo (single source of truth)
+     instead of only the people it already knows locally. Aggregates only
+     — no emails, no answers, no password data. Refreshed on entering the
+     leaderboard view and every 60s while it is open. */
+  function loadBoard(opts) {
+    opts = opts || {};
+    if (!server.enabled || server.boardLoading) return;
+    if (!opts.force && Date.now() - server.boardLoadedAt < 60000) return;
+    server.boardLoading = true;
+    fetch("/api/leaderboard")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        server.boardLoading = false;
+        if (!d || !d.ok || !Array.isArray(d.users)) return;
+        server.board = d.users;
+        server.boardLoadedAt = Date.now();
+        try { if (view === "leaderboard" || view === "admin") render(); } catch (e) {}
+      })
+      .catch(function () { server.boardLoading = false; });
+  }
+  server.refreshBoard = function () { loadBoard({}); };
+  // Live refresh while the admin or leaderboard view is open: new sign-ups,
+  // attempts and photo changes arrive within ~30s, and at once on
+  // returning to the tab.
+  setInterval(function () {
+    try {
+      if (view === "admin") loadAdmin({ force: true });
+      if (view === "leaderboard" || view === "admin") loadBoard({ force: true });
+    } catch (e) {}
+  }, 30000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) {
+      try {
+        if (view === "admin") loadAdmin({ force: true });
+        if (view === "leaderboard") loadBoard({ force: true });
+      } catch (e) {}
+    }
+  });
 
   /* ---------- server-backed Live Group Quiz rooms ----------
      Rooms live in Redis (/api/live), so players on different phones can
@@ -440,7 +499,7 @@
       if (e.target && e.target.closest && e.target.closest("#hdr-logout")) {
         if (server.enabled) syncNow({ keepalive: true });
         try { localStorage.removeItem(TOKEN_KEY); } catch (err) {}
-        server.adminLoaded = false;
+        server.adminLoaded = false; server.adminLoadedAt = 0; server.adminLoading = false; server.boardLoadedAt = 0;
       }
     }, true);
   }

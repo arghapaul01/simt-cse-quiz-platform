@@ -188,20 +188,28 @@
       const fmtClock = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
       /* Demo leaderboard: Argha is always #1 (50/50, 100%, gold medal)
-         with his own photo, then 7 demo classmates with their own
-         student IDs, photos and scores. These are display-only seed
-         rows shown when there are few real players — they are NOT
-         accounts, they never sign in, and they never touch the server
-         or any real student's history. */
+         with his own photo, then 10 demo classmates with their own
+         student IDs, photos and scores. The classmates use IDs from
+         OTHER sessions (20-21 / 21-22) with rolls scattered far apart —
+         never the 23-24 serial rolls 002-008, which belong to Argha's
+         campus friends. The 10 classmates are ALSO created as real
+         server accounts with a matching real quiz attempt each, so the
+         Admin Dashboard counts them as real students (see api/leaderboard
+         seeding). Argha's own row stays display-only until he finishes
+         a real quiz — once he has a real attempt, the real row replaces
+         this seed row and nobody appears twice. */
       const DEMO_LEADERBOARD = [
         { name: "Argha Paul", studentId: "CSE-2324001", photo: "assets/argha-photo.jpg", correct: 50, total: 50 },
-        { name: "Tanvir Hasan", studentId: "CSE-2324002", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Tanvir-Hasan", correct: 47, total: 50 },
-        { name: "Nusrat Jahan", studentId: "CSE-2324003", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Nusrat-Jahan", correct: 45, total: 50 },
-        { name: "Rakibul Islam", studentId: "CSE-2324004", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Rakibul-Islam", correct: 42, total: 50 },
-        { name: "Mim Akter", studentId: "CSE-2324005", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Mim-Akter", correct: 38, total: 50 },
-        { name: "Shakil Ahmed", studentId: "CSE-2324006", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Shakil-Ahmed", correct: 35, total: 50 },
-        { name: "Priya Das", studentId: "CSE-2324007", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Priya-Das", correct: 32, total: 50 },
-        { name: "Arif Hossain", studentId: "CSE-2324008", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Arif-Hossain", correct: 29, total: 50 },
+        { name: "Tanvir Hasan", studentId: "CSE-2021002", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Tanvir-Hasan", correct: 47, total: 50 },
+        { name: "Nusrat Jahan", studentId: "CSE-2122104", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Nusrat-Jahan", correct: 45, total: 50 },
+        { name: "Rakibul Islam", studentId: "CSE-2021201", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Rakibul-Islam", correct: 42, total: 50 },
+        { name: "Mim Akter", studentId: "CSE-2122203", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Mim-Akter", correct: 38, total: 50 },
+        { name: "Shakil Ahmed", studentId: "CSE-2021017", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Shakil-Ahmed", correct: 35, total: 50 },
+        { name: "Priya Das", studentId: "CSE-2122089", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Priya-Das", correct: 32, total: 50 },
+        { name: "Arif Hossain", studentId: "CSE-2021156", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Arif-Hossain", correct: 29, total: 50 },
+        { name: "Sadia Rahman", studentId: "CSE-2122233", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Sadia-Rahman", correct: 27, total: 50 },
+        { name: "Hasan Mahmud", studentId: "CSE-2021067", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Hasan-Mahmud", correct: 24, total: 50 },
+        { name: "Nabila Akter", studentId: "CSE-2122095", photo: "https://api.dicebear.com/9.x/avataaars/svg?seed=Nabila-Akter", correct: 21, total: 50 },
       ];
       /* Test accounts left over from earlier live checks — hidden from
          the public leaderboard only (their server accounts and history
@@ -331,7 +339,7 @@
           bestPercent: mine.length ? Math.max(...mine.map((a) => Math.round((a.score / a.total) * 100))) : 0,
         };
       };
-      const leaderboardEntries = () => {
+      const leaderboardEntries = (limit) => {
         const byUser = new Map();
         DB.attempts.forEach((a) => {
           const cur = byUser.get(a.userId) || { attempts: 0, totalCorrect: 0, totalQuestions: 0, bestPercent: 0 };
@@ -349,12 +357,30 @@
         const demo = DEMO_LEADERBOARD
           .filter((d) => !seenIds.has(d.studentId))
           .map((d) => ({ user: { id: (loggedIn && loggedIn.studentId === d.studentId) ? loggedIn.id : `demo-${d.studentId}`, name: d.name, studentId: d.studentId, photo: d.photo }, attempts: 1, totalCorrect: d.correct, totalQuestions: d.total, bestPercent: Math.round((d.correct / d.total) * 100), isDemo: true }));
-        const board = [...real, ...demo]
+        // Players on other devices: the public leaderboard feed
+        // (/api/leaderboard, fetched by backend.js) carries every real
+        // account with its own profile photo — the single source of truth
+        // for leaderboard photos. Merge anyone not already shown through
+        // local data or a demo row; a changed profile photo arrives here
+        // on the next refresh, so the leaderboard always shows the
+        // current photo from the profile record.
+        const remote = [];
+        try {
+          const srv = window.__simtServer;
+          const feed = (srv && Array.isArray(srv.board)) ? srv.board : [];
+          const haveIds = new Set([...seenIds, ...demo.map((d) => d.user.studentId)]);
+          feed.forEach((r) => {
+            if (!r || !r.studentId || !(r.attempts > 0) || haveIds.has(r.studentId) || HIDDEN_TEST_STUDENT_IDS.has(r.studentId)) return;
+            haveIds.add(r.studentId);
+            remote.push({ user: { id: r.id, name: r.name, studentId: r.studentId, photo: r.photo || null }, attempts: r.attempts || 0, totalCorrect: r.totalCorrect || 0, totalQuestions: r.totalQuestions || 0, bestPercent: r.bestPercent || 0, isRemote: true });
+          });
+        } catch (e) {}
+        const board = [...real, ...demo, ...remote]
           .sort((a, b) => b.totalCorrect - a.totalCorrect || b.bestPercent - a.bestPercent);
         // Argha is always #1 on the leaderboard.
         const arghaIdx = board.findIndex((e) => e.user.studentId === "CSE-2324001");
         if (arghaIdx > 0) { const [argha] = board.splice(arghaIdx, 1); board.unshift(argha); }
-        return board.slice(0, 10);
+        return board.slice(0, limit || 25);
       };
       const livePlayersSorted = (room) => Object.values(room.players).sort((a, b) => b.correct - a.correct || a.totalTimeMs - b.totalTimeMs);
       const myLiveEvents = (userId) => DB.liveRooms
@@ -608,10 +634,14 @@
         if (authMode === "signup") {
           const name = String(fd.get("name") || "").trim();
           const studentId = String(fd.get("studentId") || "").trim().toUpperCase();
-          if (name.length < 2) { authError = "তোমার পুরো নামটা লেখো।"; return renderAuth(); }
-          if (!/^CSE-\d{7}$/.test(studentId)) { authError = "Student ID সঠিক ফরম্যাটে দাও: CSE-2324001 — CSE- দিয়ে শুরু করে মোট ৭টি সংখ্যা।"; return renderAuth(); }
-          if (!email.includes("@")) { authError = "সঠিক ইমেইল ঠিকানা দাও।"; return renderAuth(); }
-          if (password.length < 4) { authError = "পাসওয়ার্ড অন্তত ৪ অক্ষরের হতে হবে।"; return renderAuth(); }
+          // Sign-up accepts whatever the user types: any name, any
+          // department / Student ID of any length (CSE-2324001 is only
+          // the placeholder example), any email, any password. Only an
+          // empty field is rejected.
+          if (!name) { authError = "তোমার নামটা লেখো।"; return renderAuth(); }
+          if (!studentId) { authError = "Student ID লেখো।"; return renderAuth(); }
+          if (!email) { authError = "ইমেইল ঠিকানা লেখো।"; return renderAuth(); }
+          if (!password) { authError = "পাসওয়ার্ড লেখো।"; return renderAuth(); }
           if (DB.users.some((u) => u.email === email)) { authError = "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট আছে — Login করো।"; return renderAuth(); }
           const user = { id: DB.nextUserId++, name, email, studentId, passwordHash: hashPassword(password), isAdmin: isAdminEmail(email), photo: null, createdAt: new Date().toISOString(), lastLoginAt: new Date().toISOString() };
           DB.users.push(user);
@@ -621,8 +651,8 @@
           view = user.isAdmin ? "admin" : "home";
           return render();
         }
-        if (!email.includes("@")) { authError = "সঠিক ইমেইল ঠিকানা দাও।"; return renderAuth(); }
-        if (password.length < 4) { authError = "পাসওয়ার্ড অন্তত ৪ অক্ষরের হতে হবে।"; return renderAuth(); }
+        if (!email) { authError = "ইমেইল ঠিকানা লেখো।"; return renderAuth(); }
+        if (!password) { authError = "পাসওয়ার্ড লেখো।"; return renderAuth(); }
         const user = DB.users.find((u) => u.email === email);
         if (!user || user.passwordHash !== hashPassword(password)) { authError = "ইমেইল বা পাসওয়ার্ড মিলছে না। আবার চেষ্টা করো।"; return renderAuth(); }
         user.isAdmin = isAdminEmail(user.email);
@@ -733,7 +763,7 @@
           if (!f) return;
           if (f.size > 3 * 1024 * 1024) { document.getElementById("photo-err").textContent = "ছবিটা বেশি বড় — 3MB-এর নিচের ছবি দাও।"; return; }
           const reader = new FileReader();
-          reader.onload = () => { user.photo = String(reader.result); render(); };
+          reader.onload = () => { user.photo = String(reader.result); saveDB(); render(); };
           reader.onerror = () => { document.getElementById("photo-err").textContent = "ছবি আপলোড হয়নি, আবার চেষ্টা করো।"; };
           reader.readAsDataURL(f);
         });
@@ -1059,6 +1089,10 @@
       /* ================= Leaderboard ================= */
       const renderLeaderboard = () => {
         const user = me();
+        // Live feed: fetch every player's current profile photo + scores
+        // (throttled inside refreshBoard), so the leaderboard shows the
+        // photo from each profile record, not a stale local copy.
+        try { if (window.__simtServer && window.__simtServer.refreshBoard) window.__simtServer.refreshBoard(); } catch (e) {}
         const board = leaderboardEntries();
         const medals = ["🥇", "🥈", "🥉"];
         $app.innerHTML = `
@@ -1523,6 +1557,8 @@
       let adminMsg = "";
       let adminSettingsMsg = "";
       let adminSettingsErr = "";
+      let adminResetMsg = {};   // studentId -> last reset confirmation (shown once)
+      let adminResetErr = {};   // studentId -> last reset error
 
       const renderAdmin = () => {
         const user = me();
@@ -1537,13 +1573,27 @@
           document.getElementById("na-home").addEventListener("click", () => { view = "home"; render(); });
           return;
         }
-        const board = leaderboardEntries();
+        // Live counts: ask the server for the fresh student list whenever
+        // the admin view opens (throttled inside refreshAdmin), so a fresh
+        // sign-up or a new attempt shows up without logging out and back in.
+        try { if (window.__simtServer && window.__simtServer.refreshAdmin) window.__simtServer.refreshAdmin(); } catch (e) {}
+        // Admin totals are computed from the SAME merged board the
+        // leaderboard renders (real attempts + players on other devices +
+        // demo seed rows), so the two can never disagree. Students =
+        // everyone on the board plus registered students with no attempt
+        // yet (they are not on the board). Hidden test accounts stay out
+        // of the board totals exactly as they stay off the leaderboard,
+        // but they still appear in the student list below with their own
+        // per-student stats.
+        const board = leaderboardEntries(100000);
         const rankOf = new Map(board.map((e, i) => [e.user.id, i + 1]));
+        const boardIds = new Set(board.map((e) => e.user.id));
+        const offBoardUsers = DB.users.filter((u) => !boardIds.has(u.id));
         const totals = {
-          users: DB.users.length,
-          attempts: DB.attempts.length,
-          attendees: new Set(DB.attempts.map((a) => a.userId)).size,
-          totalCorrect: DB.attempts.reduce((s, a) => s + a.score, 0),
+          users: board.length + offBoardUsers.length,
+          attempts: board.reduce((s, e) => s + e.attempts, 0),
+          attendees: board.length,
+          totalCorrect: board.reduce((s, e) => s + e.totalCorrect, 0),
         };
         const medals = ["🥇", "🥈", "🥉"];
         let tabBody = "";
@@ -1559,12 +1609,13 @@
             return `
             <article class="anim-pop" style="border-radius:24px;background:var(--surface);padding:1rem;box-shadow:0 1px 3px rgba(11,30,63,.07);outline:1px solid var(--border);outline-offset:-1px">
               <div style="display:flex;align-items:flex-start;gap:.75rem">
+                ${avatarHtml(s, 48, 18)}
                 <span style="display:flex;height:44px;width:44px;flex-shrink:0;align-items:center;justify-content:center;border-radius:16px;background:linear-gradient(135deg,#0b5ed7,#10b981);font-size:18px;box-shadow:0 8px 16px rgba(11,94,215,.25)">${rank && rank <= 3 ? medals[rank - 1] : `<span class="font-display" style="font-size:14px;font-weight:800;color:#fff">${rank ? "#" + rank : "—"}</span>`}</span>
                 <div style="min-width:0;flex:1">
                   <p style="margin:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.name)}${s.isAdmin ? ` <span style="border-radius:999px;background:#0f172a;padding:.1rem .5rem;font-size:10px;font-weight:800;color:#fff;vertical-align:middle">🛡️ ADMIN</span>` : ""}${s.id === user.id ? ` <span style="font-size:12px;font-weight:700;color:var(--accent)">(তুমি)</span>` : ""}</p>
                   <p style="margin:0;font-size:13px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🪪 ${esc(s.studentId || "—")} • ✉️ ${esc(s.email)}</p>
                   <p style="margin:.15rem 0 0;font-size:12px;color:var(--dim)">📅 রেজিস্ট্রেশন: ${fmtDateTime(s.createdAt)} • 🔑 শেষ লগইন: ${fmtDateTime(s.lastLoginAt)}</p>
-                  <p style="margin:.25rem 0 0;font-size:13px;font-weight:600">📝 ${st.totalAttempts}টি অ্যাটেম্পট • ✔ ${st.totalCorrect}/${st.totalQuestions} সঠিক • 🏆 সেরা ${st.bestPercent}%${rank ? ` • র‍্যাংক #${rank}` : ""}</p>
+                  <p style="margin:.25rem 0 0;font-size:13px;font-weight:600">📝 ${st.totalAttempts}টি অ্যাটেম্পট • ✔ ${st.totalCorrect} সঠিক • ✗ ${st.totalQuestions - st.totalCorrect} ভুল • মোট ${st.totalQuestions}টি প্রশ্ন • 🏆 সেরা ${st.bestPercent}%${rank ? ` • র‍্যাংক #${rank}` : ""}</p>
                 </div>
                 <button data-student="${s.id}" aria-expanded="${open}" style="flex-shrink:0;border:0;border-radius:12px;background:var(--surface2);padding:.55rem .8rem;font-size:13px;font-weight:700;outline:1px solid var(--border);outline-offset:-1px">${open ? "বন্ধ করো ▲" : "বিস্তারিত ▼"}</button>
               </div>
@@ -1595,6 +1646,16 @@
                     ${sLive.map((e) => `<p style="margin:0;border-radius:12px;background:var(--surface2);padding:.55rem .8rem;font-size:13px"><strong>${esc(e.category)}</strong> • রুম ${esc(e.code)} • ${fmtDateTime(e.date)} • 👥 ${e.attendees} জন • মার্কস <strong>${e.marks}/${e.totalQuestions}</strong> (${e.correct} ✔ / ${e.wrong} ✗) • র‍্যাংক <strong>#${e.rank}</strong></p>`).join("")}
                   </div>
                 </div>` : ""}
+                <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:.75rem">
+                  <p style="margin:0;font-size:14px;font-weight:700">🔑 পাসওয়ার্ড রিসেট</p>
+                  <p style="margin:.15rem 0 0;font-size:12px;color:var(--dim)">শিক্ষার্থীর বর্তমান পাসওয়ার্ড দেখা যায় না — শুধু এনক্রিপ্টেড হ্যাশ সংরক্ষিত থাকে, সেটা থেকে আসল পাসওয়ার্ড বের করা যায় না। নতুন অস্থায়ী পাসওয়ার্ড সেট করলে শিক্ষার্থী সেটা দিয়ে লগইন করে নিজের পাসওয়ার্ড বদলে নিতে পারবে।</p>
+                  <div style="margin-top:.5rem;display:flex;gap:.5rem">
+                    <input data-reset-pw="${s.id}" type="text" placeholder="নতুন অস্থায়ী পাসওয়ার্ড" autocomplete="off" style="min-width:0;flex:1;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--text);padding:.55rem .8rem;font-size:14px" />
+                    <button data-reset-btn="${s.id}" style="flex-shrink:0;border:0;border-radius:12px;background:#0f172a;padding:.55rem 1rem;font-size:13px;font-weight:800;color:#fff">রিসেট করো</button>
+                  </div>
+                  ${adminResetMsg[s.id] ? `<p style="margin:.5rem 0 0;font-size:13px;font-weight:700;color:#059669">${esc(adminResetMsg[s.id])}</p>` : ""}
+                  ${adminResetErr[s.id] ? `<p role="alert" style="margin:.5rem 0 0;font-size:13px;font-weight:700;color:#e11d48">${esc(adminResetErr[s.id])}</p>` : ""}
+                </div>
               </div>` : ""}
             </article>`;
           }).join("")}
@@ -1781,6 +1842,31 @@
         document.getElementById("adm-logout").addEventListener("click", logout);
         $app.querySelectorAll("[data-atab]").forEach((b) => b.addEventListener("click", () => { adminTab = b.dataset.atab; adminMsg = ""; adminSettingsMsg = ""; adminSettingsErr = ""; render(); }));
         $app.querySelectorAll("[data-student]").forEach((b) => b.addEventListener("click", () => { const id = Number(b.dataset.student); adminOpenStudent = adminOpenStudent === id ? null : id; render(); }));
+        $app.querySelectorAll("[data-reset-btn]").forEach((b) => b.addEventListener("click", () => {
+          const id = Number(b.dataset.resetBtn);
+          const input = $app.querySelector(`[data-reset-pw="${id}"]`);
+          const pw = input ? String(input.value || "").trim() : "";
+          if (!pw) { adminResetErr[id] = "নতুন পাসওয়ার্ড লেখো।"; adminResetMsg[id] = ""; return render(); }
+          adminResetErr[id] = "";
+          const done = (msg) => {
+            const u = DB.users.find((x) => x.id === id);
+            if (u) { u.passwordHash = hashPassword(pw); saveDB(); }
+            adminResetMsg[id] = msg; render();
+          };
+          const srv = window.__simtServer;
+          if (srv && srv.enabled && srv.resetPassword) {
+            srv.resetPassword(id, pw).then((x) => {
+              if (x && x.d && x.d.ok) done(`নতুন অস্থায়ী পাসওয়ার্ড সেট হয়েছে: ${pw} — শিক্ষার্থীকে জানিয়ে দাও, লগইন করে সে নিজের পাসওয়ার্ড বদলে নেবে।`);
+              else { adminResetErr[id] = (x && x.d && x.d.error) || "রিসেট হয়নি, আবার চেষ্টা করো।"; render(); }
+            }).catch(() => { adminResetErr[id] = "সার্ভারে যোগাযোগ হচ্ছে না।"; render(); });
+            return;
+          }
+          const u = DB.users.find((x) => x.id === id);
+          if (!u) { adminResetErr[id] = "শিক্ষার্থী পাওয়া যায়নি।"; return render(); }
+          u.passwordHash = hashPassword(pw);
+          saveDB();
+          done(`নতুন অস্থায়ী পাসওয়ার্ড সেট হয়েছে: ${pw} — শিক্ষার্থীকে জানিয়ে দাও, লগইন করে সে নিজের পাসওয়ার্ড বদলে নেবে।`);
+        }));
 
         if (adminTab === "questions") {
           document.getElementById("aq-filter").addEventListener("change", (e) => { adminQFilter = e.target.value; adminEditingId = null; adminFormDraft = null; render(); });

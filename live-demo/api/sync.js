@@ -27,12 +27,16 @@ module.exports = async (req, res) => {
   if (!user) return lib.send(res, 401, { error: "অ্যাকাউন্ট পাওয়া যায়নি — আবার লগইন করো।" });
 
   if (body.user && typeof body.user === "object") {
-    if (typeof body.user.name === "string" && body.user.name.trim().length >= 2) {
+    if (typeof body.user.name === "string" && body.user.name.trim().length >= 1) {
       user.name = body.user.name.trim();
     }
     if (body.user.photo !== undefined) {
       const photo = String(body.user.photo || "");
-      if (photo && /^data:image\/(png|jpeg|jpg);base64,/.test(photo) && photo.length <= lib.MAX_PHOTO_CHARS) {
+      // A profile photo is either a small uploaded data:image URL or a
+      // DiceBear avatar URL (the seeded leaderboard classmates keep their
+      // avatar-service photos as their stored profile photo, so the
+      // leaderboard shows the same image as the profile record).
+      if (photo && ((/^data:image\/(png|jpeg|jpg);base64,/.test(photo) && photo.length <= lib.MAX_PHOTO_CHARS) || /^https:\/\/api\.dicebear\.com\/9\.x\/avataaars\/svg\?seed=[A-Za-z0-9\-_]+$/.test(photo))) {
         user.photo = photo;
       } else if (!photo) {
         user.photo = null;

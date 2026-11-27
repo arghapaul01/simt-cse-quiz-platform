@@ -38,12 +38,12 @@ module.exports = async (req, res) => {
   if (action === "signup") {
     const name = String(body.name || "").trim();
     const studentId = String(body.studentId || "").trim().toUpperCase();
-    if (name.length < 2) return lib.send(res, 400, { error: "তোমার পুরো নামটা লেখো।" });
-    if (!lib.validStudentId(studentId)) {
-      return lib.send(res, 400, { error: "Student ID সঠিক ফরম্যাটে দাও: CSE-2324001 — CSE- দিয়ে শুরু করে মোট ৭টি সংখ্যা।" });
-    }
-    if (!lib.validEmail(email)) return lib.send(res, 400, { error: "সঠিক ইমেইল ঠিকানা দাও।" });
-    if (password.length < 4) return lib.send(res, 400, { error: "পাসওয়ার্ড অন্তত ৪ অক্ষরের হতে হবে।" });
+    if (!name) return lib.send(res, 400, { error: "তোমার নামটা লেখো।" });
+    // Any Student ID is accepted — any department (CSE, EEE, ...),
+    // any length. CSE-2324001 is only the placeholder example on the form.
+    if (!studentId) return lib.send(res, 400, { error: "Student ID লেখো।" });
+    if (!email) return lib.send(res, 400, { error: "ইমেইল ঠিকানা লেখো।" });
+    if (!password) return lib.send(res, 400, { error: "পাসওয়ার্ড লেখো।" });
     const existing = await lib.getUserByEmail(email);
     if (existing) return lib.send(res, 409, { error: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট আছে — Login করো।" });
     const id = await lib.kvIncr("seq:user");
@@ -65,8 +65,8 @@ module.exports = async (req, res) => {
   }
 
   if (action === "login") {
-    if (!lib.validEmail(email)) return lib.send(res, 400, { error: "সঠিক ইমেইল ঠিকানা দাও।" });
-    if (password.length < 4) return lib.send(res, 400, { error: "পাসওয়ার্ড অন্তত ৪ অক্ষরের হতে হবে।" });
+    if (!email) return lib.send(res, 400, { error: "ইমেইল ঠিকানা লেখো।" });
+    if (!password) return lib.send(res, 400, { error: "পাসওয়ার্ড লেখো।" });
     const user = await lib.getUserByEmail(email);
     if (!user || !lib.verifyPassword(password, user.passwordHash)) {
       return lib.send(res, 401, { error: "ইমেইল বা পাসওয়ার্ড মিলছে না। আবার চেষ্টা করো।" });

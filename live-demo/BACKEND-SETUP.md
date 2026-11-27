@@ -39,6 +39,19 @@ created, the page keeps working exactly as before (browser-only storage).
 - `GET /api/admin/overview` — admin only (arghapaulnillarghapaul@gmail.com):
   total students, total attempts, every student's history. Password hashes
   are never sent to any client.
+- `POST /api/admin { action: "reset-password", userId, newPassword }` —
+  admin only: sets a new temporary password for a locked-out student.
+  The student's current password is never shown and cannot be recovered
+  (one-way scrypt hashes); the new password is never returned or stored
+  in plaintext.
+- `GET /api/leaderboard` — public, no login: every registered student
+  with quiz aggregates only (name, Student ID, photo, attempts, correct,
+  total, best %). No emails, no answers, no password data. The page
+  merges this into the leaderboard so every browser shows each player's
+  current profile photo (single source of truth).
+- Sign-up accepts any name, Student ID (any department, any length),
+  email and password — only an empty field is rejected. CSE-2324001 is
+  only the placeholder example on the form.
 - `GET /api/health` — `{ ok, storage: "upstash-redis" | "unconfigured" }`.
 - `POST /api/live` + `GET /api/live` — server-backed Live Group Quiz rooms
   (see "Live rooms" below). Max **50 players per room** including the host.
